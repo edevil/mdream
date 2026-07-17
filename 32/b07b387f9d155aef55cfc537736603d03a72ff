@@ -1,0 +1,19 @@
+crates/edge/src/lib.rs
+  s_6d895c4d03c0f4::t_d02d2af8d77b67 128
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "32b07b387f9d155aef55cfc537736603d03a72ff",
+  "prompts": {},
+  "sessions": {
+    "s_6d895c4d03c0f4": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_09029a349ffe5SzEfNpRS0nAGW",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "André Cruz <acruz@cloudflare.com>"
+    }
+  }
+}
