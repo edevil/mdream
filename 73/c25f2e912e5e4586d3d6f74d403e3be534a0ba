@@ -1,0 +1,19 @@
+crates/core/src/bin.rs
+  s_e92cfa438a5384::t_910deca61e7819 72-73,83-98,102-108
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "73c25f2e912e5e4586d3d6f74d403e3be534a0ba",
+  "prompts": {},
+  "sessions": {
+    "s_e92cfa438a5384": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_08038cc5bffeJ6fvsWw57EDzX4",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "André Cruz <acruz@cloudflare.com>"
+    }
+  }
+}
