@@ -1,0 +1,19 @@
+crates/core/src/convert/mod.rs
+  s_2a1c5bbba31140::t_826dbc3b48f141 92-101,573,581,584-586,588,592,621-628,922-931
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "0e56b1cb66457b38217da332fe9cedccc9d82bdd",
+  "prompts": {},
+  "sessions": {
+    "s_2a1c5bbba31140": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_079f1bc16ffeDXbLQIfRh5je8O",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "André Cruz <acruz@cloudflare.com>"
+    }
+  }
+}
