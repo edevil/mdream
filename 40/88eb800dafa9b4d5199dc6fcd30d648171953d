@@ -1,0 +1,33 @@
+crates/core/tests/conversion.rs
+  s_e388c4c0179ad5::t_e8a392f5805035 256-298
+crates/core/src/convert/output.rs
+  s_e388c4c0179ad5::t_baff43f13e07cf 537,576,688-696,896,1148-1167,1172-1175,1228-1230,1241-1242,1244-1246,1254-1262,1264-1266,1434-1436,1465-1466,1474-1511,1740-1741,1958-1959
+crates/core/src/convert/mod.rs
+  s_f5322498b4c51e::t_3f5fea2c0bc78f 653,728-732
+crates/core/src/convert/parse.rs
+  s_f5322498b4c51e::t_0c0a7862e8cf3b 631-632,1086,1116,1331-1333
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "4088eb800dafa9b4d5199dc6fcd30d648171953d",
+  "prompts": {},
+  "sessions": {
+    "s_e388c4c0179ad5": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_0718bf9beffe4tTF74LVXEEJfY",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "André Cruz <acruz@cloudflare.com>"
+    },
+    "s_f5322498b4c51e": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_0706ed7f1ffepKOyhd8LWp9BCU",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "André Cruz <acruz@cloudflare.com>"
+    }
+  }
+}
