@@ -1,0 +1,21 @@
+crates/core/src/convert/output.rs
+  s_e388c4c0179ad5::t_baff43f13e07cf 537,576,688-696,896,1148-1167,1172-1175,1228-1230,1253-1261,1263-1265,1440-1442,1471-1472,1480-1517,1746-1747,1964-1965
+crates/core/tests/conversion.rs
+  s_e388c4c0179ad5::t_e8a392f5805035 256-298
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "8c851e6746006104c7f90bc0c7fd641374c5b2dc",
+  "prompts": {},
+  "sessions": {
+    "s_e388c4c0179ad5": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_0718bf9beffe4tTF74LVXEEJfY",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "André Cruz <acruz@cloudflare.com>"
+    }
+  }
+}
