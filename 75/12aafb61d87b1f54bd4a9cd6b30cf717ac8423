@@ -1,0 +1,30 @@
+packages/js/test/unit/gfm-text-escaping.test.ts
+  s_6d895c4d03c0f4::t_8c631af355b390 99,101
+packages/mdream/test/unit/nodes/pre-code-block.test.ts
+  s_6d895c4d03c0f4::t_8041ab34685947 33-69,84,86,149-166
+crates/core/src/convert/output.rs
+  s_6d895c4d03c0f4::t_fcc4823f06435f 2433-2440
+packages/js/src/utils.ts
+  s_6d895c4d03c0f4::t_71cff16a628449 75-76
+  s_6d895c4d03c0f4::t_c275c230c99aa5 77-131
+crates/core/tests/conversion.rs
+  s_6d895c4d03c0f4::t_524d510d447a07 571,580-624
+packages/js/src/tags.ts
+  s_6d895c4d03c0f4::t_08f27fa0af6977 124
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "7512aafb61d87b1f54bd4a9cd6b30cf717ac8423",
+  "prompts": {},
+  "sessions": {
+    "s_6d895c4d03c0f4": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_09029a349ffe5SzEfNpRS0nAGW",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "André Cruz <acruz@cloudflare.com>"
+    }
+  }
+}
