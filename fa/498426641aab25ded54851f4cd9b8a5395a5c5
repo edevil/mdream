@@ -7,11 +7,11 @@ package.json
 packages/js/src/tags.ts
   s_6d895c4d03c0f4::t_08f27fa0af6977 123
 packages/js/src/utils.ts
-  s_6d895c4d03c0f4::t_c275c230c99aa5 75-103
+  s_6d895c4d03c0f4::t_c275c230c99aa5 75-103,76,77-80,83,84,87-89,92-97,99-103
 packages/js/test/unit/gfm-text-escaping.test.ts
   s_6d895c4d03c0f4::t_8c631af355b390 99,101
 packages/mdream/test/unit/nodes/pre-code-block.test.ts
-  s_6d895c4d03c0f4::t_8041ab34685947 3,34-76,91,93,156-173
+  s_6d895c4d03c0f4::t_8041ab34685947 3,34-76,34-68,75-76,91,93,156-173
 packages/mdream/test/utils/markdown.ts
   s_6d895c4d03c0f4::t_c82287bf349384 1-9
 pnpm-lock.yaml
