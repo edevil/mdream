@@ -951,7 +951,7 @@ impl ConvertState {
             self.buffer.push('<');
             self.buffer.push_str(&resolved);
             self.buffer.push('>');
-            self.last_content_cache_len = self.buffer.len();
+            self.last_content_cache_len = self.buffer.len() - bp;
             self.last_node_is_inline = is_inline;
             return;
           }
@@ -963,7 +963,7 @@ impl ConvertState {
           (!title.is_empty()).then_some(title),
           in_table_cell,
         );
-        self.last_content_cache_len = self.buffer.len(); // will be recalculated
+        self.last_content_cache_len = self.buffer.len() - self.link_bracket_pos;
       }
       // Record fragment link position for deferred fixup
       if self.clean_flags & CLEAN_FRAGMENTS != 0

@@ -146,6 +146,7 @@ mod drain_equiv {
     "<h1>Title</h1><p>Para one.</p><p>Para <strong>two</strong>.</p>",
     "<ul><li>a</li><li>b<ul><li>b1</li><li>b2</li></ul></li></ul>",
     r#"<p>See <a href="https://example.com">Example</a> and <a href="https://x.io">the X site</a>.</p>"#,
+    r#"<p>See <a href="https://example.com" title="Example site">Example</a>.</p>"#,
     "<blockquote><p>quote</p><blockquote><p>nested</p></blockquote></blockquote><p>after</p>",
     "<pre><code>let x = 1;\nlet y = 2;</code></pre><p>done</p>",
     "<table><tr><th>A</th><th>B</th></tr><tr><td>1</td><td>2</td></tr></table>",
@@ -224,6 +225,30 @@ mod drain_equiv {
       processor.state.buffer.len() < 1024,
       "yielded skipped links accumulated {} buffered bytes",
       processor.state.buffer.len()
+    );
+  }
+
+  #[test]
+  fn completed_links_do_not_retain_prior_output() {
+    fn assert_released(html: &str, iterations: usize) {
+      let mut processor = MarkdownStreamProcessor::new(HTMLToMarkdownOptions::default());
+
+      for _ in 0..iterations {
+        drop(processor.process_chunk(html));
+      }
+
+      assert!(
+        processor.state.buffer.len() < 1024,
+        "completed links accumulated {} buffered bytes",
+        processor.state.buffer.len()
+      );
+      drop(processor.finish());
+    }
+
+    assert_released(r#"<a href="/x">x</a>"#, 350_000);
+    assert_released(
+      r#"<a href="https://example.com">https://example.com</a>"#,
+      512,
     );
   }
 }
