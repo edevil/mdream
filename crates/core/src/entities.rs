@@ -64,8 +64,8 @@ fn is_ascii_alphanumeric(byte: u8) -> bool {
   byte.is_ascii_alphanumeric()
 }
 
-fn is_character_reference_tail(bytes: &[u8], start: usize) -> bool {
-  let mut index = start;
+pub(crate) fn is_entity_reference_after_ampersand(bytes: &[u8]) -> bool {
+  let mut index = 0;
   if bytes.get(index) == Some(&b'#') {
     index += 1;
     let hex = matches!(bytes.get(index), Some(b'x' | b'X'));
@@ -100,7 +100,7 @@ fn push_decoded_reference(
 ) {
   if replacement == "&"
     && protect_decoded_entity_references
-    && is_character_reference_tail(bytes, next)
+    && is_entity_reference_after_ampersand(&bytes[next..])
   {
     result.push_str("\\&");
   } else {
@@ -166,7 +166,7 @@ fn decode_html_entities_alloc(
         };
         if replacement == '&'
           && protect_decoded_entity_references
-          && is_character_reference_tail(bytes, next)
+          && is_entity_reference_after_ampersand(&bytes[next..])
         {
           result.push_str("\\&");
         } else {

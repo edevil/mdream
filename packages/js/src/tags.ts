@@ -121,7 +121,7 @@ import {
   TAG_XMP,
   TagIdMap,
 } from './const'
-import { continuationPrefix, getLanguageFromClass, isEmptyLinkHref } from './utils'
+import { continuationPrefix, getLanguageFromClass, isEmptyLinkHref, isEntityReferenceAfterAmpersand } from './utils'
 
 const TRACKING_PARAM_RE = /^(?:utm_|fbclid|gclid|mc_eid|msclkid|oly_)/
 const URL_SCHEME_RE = /^[\dA-Z+.-]+:/i
@@ -159,14 +159,41 @@ export function resolveUrl(url: string, origin?: string, clean?: EngineOptions['
   return cleansUrls && resolved.includes('?') ? stripTrackingParams(resolved) : resolved
 }
 
-function serializeMarkdownDestination(destination: string): string {
-  if (!/[\t\n\f\r ()\\<>]/.test(destination))
+function serializeMarkdownDestination(destination: string, inTableCell: boolean): string {
+  let wrapped = false
+  let needsSerialization = false
+  for (let index = 0; index < destination.length; index++) {
+    const code = destination.charCodeAt(index)
+    wrapped ||= code === 32 || code === 40 || code === 41 || code === 92 || code === 60 || code === 62
+    needsSerialization ||= code < 0x20 || code === 0x7F || (inTableCell && code === 124)
+      || (code === 38 && isEntityReferenceAfterAmpersand(destination, index))
+  }
+  if (!wrapped && !needsSerialization)
     return destination
 
-  const escaped = /[\\<>]/.test(destination)
-    ? destination.replace(/[\\<>]/g, '\\$&')
-    : destination
-  return `<${escaped}>`
+  let serialized = ''
+  let copiedUntil = 0
+  for (let index = 0; index < destination.length; index++) {
+    const code = destination.charCodeAt(index)
+    const control = code < 0x20 || code === 0x7F
+    const entity = code === 38 && isEntityReferenceAfterAmpersand(destination, index)
+    const escaped = (wrapped && (code === 92 || code === 60 || code === 62))
+      || (inTableCell && code === 124)
+    if (control || entity || escaped) {
+      serialized += destination.slice(copiedUntil, index)
+      if (control)
+        serialized += `%${code.toString(16).toUpperCase().padStart(2, '0')}`
+      else
+        serialized += `\\${destination[index]}`
+      copiedUntil = index + 1
+    }
+  }
+  serialized += destination.slice(copiedUntil)
+  return wrapped ? `<${serialized}>` : serialized
+}
+
+function serializeResourceControl(code: number): string {
+  return code === 9 || code === 10 || code === 12 || code === 13 ? `&#${code};` : '\uFFFD'
 }
 
 function stripsEmptyLink(state: HandlerContext['state'], href: string): boolean {
@@ -176,21 +203,44 @@ function stripsEmptyLink(state: HandlerContext['state'], href: string): boolean 
   return isEmptyLinkHref(href)
 }
 
-function serializeMarkdownTitle(title: string): string {
-  return /[\\"]/.test(title)
-    ? title.replace(/[\\"]/g, '\\$&')
-    : title
+function serializeMarkdownResourceText(value: string, escapes: RegExp, inTableCell: boolean): string {
+  let serialized = ''
+  let copiedUntil = 0
+  for (let index = 0; index < value.length; index++) {
+    const code = value.charCodeAt(index)
+    const control = code < 0x20 || code === 0x7F
+    const entity = code === 38 && isEntityReferenceAfterAmpersand(value, index)
+    const escaped = escapes.test(value[index]!) || (inTableCell && code === 124)
+    if (control || entity || escaped) {
+      serialized += value.slice(copiedUntil, index)
+      if (control)
+        serialized += serializeResourceControl(code)
+      else
+        serialized += `\\${value[index]}`
+      copiedUntil = index + 1
+    }
+  }
+  return serialized + value.slice(copiedUntil)
 }
 
-function serializeMarkdownResource(destination: string, title?: string): string {
-  const serializedTitle = title ? ` "${serializeMarkdownTitle(title)}"` : ''
-  return `(${serializeMarkdownDestination(destination)}${serializedTitle})`
+function serializeMarkdownResource(destination: string, title: string | undefined, inTableCell: boolean): string {
+  const serializedTitle = title ? ` "${serializeMarkdownResourceText(title, /[\\"]/, inTableCell)}"` : ''
+  return `(${serializeMarkdownDestination(destination, inTableCell)}${serializedTitle})`
 }
 
-function serializeImageDescription(alt: string): string {
-  return /[\\[\]*_`~<&]/.test(alt)
-    ? alt.replace(/[\\[\]*_`~<&]/g, '\\$&')
-    : alt
+function serializeImageDescription(alt: string, inTableCell: boolean): string {
+  return serializeMarkdownResourceText(alt, /[\\[\]*_`~<&]/, inTableCell)
+}
+
+function destinationNeedsSafetySerialization(destination: string, inTableCell: boolean): boolean {
+  for (let index = 0; index < destination.length; index++) {
+    const code = destination.charCodeAt(index)
+    if (code < 0x20 || code === 0x7F || (inTableCell && code === 124)
+      || (code === 38 && isEntityReferenceAfterAmpersand(destination, index))) {
+      return true
+    }
+  }
+  return false
 }
 
 // GFM autolink shorthand: only inline-syntax-safe absolute URIs are eligible
@@ -202,7 +252,7 @@ function isAutolinkUri(s: string): boolean {
   }
   for (let i = 0; i < s.length; i++) {
     const c = s.charCodeAt(i)
-    if (c === 32 || c === 60 || c === 62 || c === 10 || c === 13 || c === 9)
+    if (c <= 32 || c === 0x7F || c === 60 || c === 62)
       return false
   }
   return true
@@ -542,6 +592,7 @@ export const tagHandlers: Record<number, TagHandler> = {
       if (stripsEmptyLink(state, node.attributes.href))
         return ''
       const href = resolveUrl(node.attributes.href, state.options?.origin, state.options?.clean)
+      const inTableCell = isInsideTableCell(state)
       let title = node.attributes?.title
       // Check if title matches the last content to avoid duplication
       const lastContent = state.lastContentCache
@@ -551,7 +602,7 @@ export const tagHandlers: Record<number, TagHandler> = {
       // GFM autolink shorthand: when the link text equals href and href is a
       // bare absolute URI, emit `<href>` instead of `[href](href)`. Mirrors
       // the Rust core (crates/core/src/convert.rs).
-      if (!title && isAutolinkUri(href)) {
+      if (!title && isAutolinkUri(href) && !destinationNeedsSafetySerialization(href, inTableCell)) {
         const buf = state.buffer
         let i = buf.length - 1
         // Sum the link-text length while scanning back for `[`, so the
@@ -572,7 +623,7 @@ export const tagHandlers: Record<number, TagHandler> = {
           return ''
         }
       }
-      return `]${serializeMarkdownResource(href, title)}`
+      return `]${serializeMarkdownResource(href, title, inTableCell)}`
     },
     collapsesInnerWhiteSpace: true,
     spacing: NO_SPACING,
@@ -582,7 +633,8 @@ export const tagHandlers: Record<number, TagHandler> = {
     enter: ({ node, state }) => {
       const alt = node.attributes?.alt || ''
       const src = resolveUrl(node.attributes?.src || '', state.options?.origin, state.options?.clean)
-      return `![${serializeImageDescription(alt)}]${serializeMarkdownResource(src, node.attributes?.title)}`
+      const inTableCell = isInsideTableCell(state)
+      return `![${serializeImageDescription(alt, inTableCell)}]${serializeMarkdownResource(src, node.attributes?.title, inTableCell)}`
     },
     collapsesInnerWhiteSpace: true,
     isSelfClosing: true,

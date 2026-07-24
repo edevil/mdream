@@ -333,6 +333,78 @@ fn gfm_links_have_reparsable_destinations_and_titles() {
 }
 
 #[test]
+fn markdown_resources_serialize_decoded_values_once() {
+  assert_eq!(
+    convert(
+      r#"<a href="https://example.test/a&#10;b&#127;?x=1&amp;y=2" title="line&#10;two &amp;copy;">link</a>"#
+    ),
+    r#"[link](https://example.test/a%0Ab%7F?x=1&y=2 "line&#10;two \&copy;")"#
+  );
+  assert_eq!(
+    convert(r#"<img src="/i&#9;m" alt="line&#10;two &amp;copy;" title="t&#13;u &amp;reg;">"#),
+    r#"![line&#10;two \&copy;](/i%09m "t&#13;u \&reg;")"#
+  );
+  assert_eq!(
+    convert(
+      r#"<table><tr><td><a href="/a|b" title="t|u">link</a></td><td><img src="/i|m" alt="a|b" title="x|y"></td></tr></table>"#
+    ),
+    r#"| [link](/a\|b "t\|u") | ![a\|b](/i\|m "x\|y") |
+| --- | --- |"#
+  );
+
+  let controls: String = (0u8..=0x1F)
+    .filter(|byte| !matches!(byte, b'\t' | b'\n' | 0x0C | b'\r'))
+    .chain(std::iter::once(0x7F))
+    .map(char::from)
+    .collect();
+  let replacements = "\u{FFFD}".repeat(controls.len());
+  assert_eq!(
+    convert(&format!(
+      "<img src=\"/x\" alt=\"a{controls}b\" title=\"t{controls}u\">"
+    )),
+    format!("![a{replacements}b](/x \"t{replacements}u\")")
+  );
+
+  let unsafe_url = "https://example.test/a\u{7F}b";
+  let unsafe_autolink = html_to_markdown(
+    &format!("<a href=\"{unsafe_url}\"><span></span></a>"),
+    HTMLToMarkdownOptions {
+      plugins: Some(PluginConfig {
+        tag_overrides: Some(vec![(
+          "span".to_string(),
+          TagOverrideConfig {
+            enter: Some(unsafe_url.to_string()),
+            exit: Some(String::new()),
+            is_inline: Some(true),
+            ..Default::default()
+          },
+        )]),
+        ..Default::default()
+      }),
+      ..Default::default()
+    },
+  );
+  assert_eq!(
+    unsafe_autolink,
+    format!("[{unsafe_url}](https://example.test/a%7Fb)")
+  );
+}
+
+#[test]
+fn markdown_resource_serialization_matches_every_stream_split() {
+  let html = r#"<p><a href="https://example.test/a&#10;b?x=1&amp;y=2" title="line&#10;two &amp;copy;">link</a><img src="/i&#127;m" alt="a&#10;b &amp;reg;"></p><table><tr><td><a href="/a|b" title="t|u">cell</a></td></tr></table>"#;
+  let expected = convert(html);
+
+  for split in 0..=html.len() {
+    let mut stream = MarkdownStreamProcessor::new(HTMLToMarkdownOptions::default());
+    let mut actual = stream.process_chunk(&html[..split]);
+    actual.push_str(&stream.process_chunk(&html[split..]));
+    actual.push_str(&stream.finish());
+    assert_eq!(actual.trim_end(), expected, "split at byte {split}");
+  }
+}
+
+#[test]
 fn link_in_paragraph() {
   assert_eq!(
     convert(r#"<p>Visit <a href="https://example.com">Example</a> for more info.</p>"#),

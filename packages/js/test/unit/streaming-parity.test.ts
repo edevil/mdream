@@ -1,6 +1,6 @@
 import type { MdreamOptions } from '../../src/types'
 import { describe, expect, it } from 'vitest'
-import { htmlToMarkdown, streamHtmlToMarkdown } from '../../src/index'
+import { createPlugin, htmlToMarkdown, streamHtmlToMarkdown } from '../../src/index'
 
 async function streamConvert(html: string, chunkSize: number, options: Partial<MdreamOptions> = {}): Promise<string> {
   const stream = new ReadableStream<string>({
@@ -81,8 +81,27 @@ describe('streaming parity with the Rust core', () => {
     String.raw`<a href="/x" title="say &quot;hi&quot; \ path">text</a>`,
     String.raw`<img src="/x.png" alt="a ] \ *bold* _em_ &#96;code&#96;">`,
     String.raw`<img src="/x.png" alt="alt" title="say &quot;hi&quot; \ path">`,
+    '<a href="https://example.test/a&#10;b&#127;?x=1&amp;y=2" title="line&#10;two &amp;copy;">link</a>',
+    '<img src="/i&#9;m" alt="line&#10;two &amp;copy;" title="t&#13;u &amp;reg;">',
+    '<table><tr><td><a href="/a|b" title="t|u">link</a></td><td><img src="/i|m" alt="a|b" title="x|y"></td></tr></table>',
   ])('keeps serialized link and image output stable for %s', async (html) => {
     await expectStreamingParity(html)
+  })
+
+  it('keeps plugin-mutated resource serialization stable', async () => {
+    const mutateResources = createPlugin({
+      processAttributes(node) {
+        if (node.name === 'a') {
+          node.attributes!.href = 'https://example.test/a\nb?x=1&copy;&y=2'
+          node.attributes!.title = 'line\ntwo &reg;'
+        }
+        else if (node.name === 'img') {
+          node.attributes!.src = '/i\u007Fm'
+          node.attributes!.alt = 'a\nb &copy;'
+        }
+      },
+    })
+    await expectStreamingParity('<a href="/old">link</a><img src="/old">', { hooks: [mutateResources] })
   })
 
   it.each([

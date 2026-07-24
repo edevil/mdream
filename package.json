@@ -40,6 +40,7 @@
     "rehype-parse": "catalog:bench",
     "rehype-remark": "catalog:bench",
     "remark-gfm": "catalog:bench",
+    "remark-parse": "catalog:",
     "remark-stringify": "catalog:bench",
     "turndown": "catalog:bench",
     "turndown-plugin-gfm": "catalog:bench",

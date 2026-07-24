@@ -1,5 +1,7 @@
 use crate::consts::*;
-use crate::entities::{decode_html_entities, decode_html_entities_for_markdown};
+use crate::entities::{
+  decode_html_entities, decode_html_entities_for_markdown, is_entity_reference_after_ampersand,
+};
 use crate::scan::{is_whitespace, process_comment_or_doctype, process_tag_attributes};
 use crate::selector::{matches_selector, parse_css_selector};
 use crate::tags::get_tag_handler;

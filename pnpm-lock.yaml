@@ -163,6 +163,9 @@ catalogs:
     playwright:
       specifier: ^1.61.1
       version: 1.61.1
+    remark-parse:
+      specifier: ^11.0.0
+      version: 11.0.0
     sirv:
       specifier: ^3.0.2
       version: 3.0.2
@@ -257,6 +260,9 @@ importers:
       remark-gfm:
         specifier: catalog:bench
         version: 4.0.1(supports-color@10.2.2)
+      remark-parse:
+        specifier: 'catalog:'
+        version: 11.0.0(supports-color@10.2.2)
       remark-stringify:
         specifier: catalog:bench
         version: 11.0.0

@@ -5,60 +5,145 @@ use super::*;
 const DESTINATION_ESCAPES: [u8; 16] = [0, 0, 0, 0, 0, 0, 0, 80, 0, 0, 0, 16, 0, 0, 0, 0];
 const TITLE_ESCAPES: [u8; 16] = [0, 0, 0, 0, 4, 0, 0, 0, 0, 0, 0, 16, 0, 0, 0, 0];
 const IMAGE_DESCRIPTION_ESCAPES: [u8; 16] = [0, 0, 0, 0, 64, 4, 0, 16, 0, 0, 0, 184, 1, 0, 0, 64];
+const HEX: &[u8; 16] = b"0123456789ABCDEF";
 
-#[inline(never)]
-fn write_ascii_escaped(output: &mut String, value: &str, escapes: &[u8; 16]) {
+fn write_percent_encoded_byte(output: &mut String, byte: u8) {
+  output.push('%');
+  output.push(HEX[(byte >> 4) as usize] as char);
+  output.push(HEX[(byte & 0x0F) as usize] as char);
+}
+
+fn write_numeric_reference(output: &mut String, byte: u8) {
+  use std::fmt::Write;
+  let _ = write!(output, "&#{byte};");
+}
+
+fn write_resource_control(output: &mut String, byte: u8) {
+  if matches!(byte, b'\t' | b'\n' | 0x0C | b'\r') {
+    write_numeric_reference(output, byte);
+  } else {
+    output.push('\u{FFFD}');
+  }
+}
+
+fn destination_needs_safety_serialization(destination: &str, in_table_cell: bool) -> bool {
+  let bytes = destination.as_bytes();
+  let mut index = 0;
+  while index < bytes.len() {
+    let byte = bytes[index];
+    if byte < 0x20
+      || byte == 0x7F
+      || (in_table_cell && byte == b'|')
+      || (byte == b'&' && is_entity_reference_after_ampersand(&bytes[index + 1..]))
+    {
+      return true;
+    }
+    index += 1;
+  }
+  false
+}
+
+fn write_markdown_destination(output: &mut String, destination: &str, in_table_cell: bool) {
+  let bytes = destination.as_bytes();
+  let mut index = 0usize;
+  let mut wrapped = false;
+  let mut serialized = false;
+  while index < bytes.len() {
+    let byte = bytes[index];
+    wrapped |= matches!(byte, b' ' | b'(' | b')' | b'\\' | b'<' | b'>');
+    serialized |= byte < 0x20
+      || byte == 0x7F
+      || (in_table_cell && byte == b'|')
+      || (byte == b'&' && is_entity_reference_after_ampersand(&bytes[index + 1..]));
+    index += 1;
+  }
+  if !wrapped && !serialized {
+    output.push_str(destination);
+    return;
+  }
+  if wrapped {
+    output.push('<');
+  }
+
+  let mut copied = 0usize;
+  index = 0;
+  while index < bytes.len() {
+    let byte = bytes[index];
+    let control = byte < 0x20 || byte == 0x7F;
+    let entity = byte == b'&' && is_entity_reference_after_ampersand(&bytes[index + 1..]);
+    let table_pipe = in_table_cell && byte == b'|';
+    let escaped =
+      wrapped && byte < 128 && DESTINATION_ESCAPES[(byte >> 3) as usize] & (1 << (byte & 7)) != 0;
+    if control || entity || table_pipe || escaped {
+      output.push_str(&destination[copied..index]);
+      if control {
+        write_percent_encoded_byte(output, byte);
+      } else {
+        output.push('\\');
+        output.push(byte as char);
+      }
+      copied = index + 1;
+    }
+    index += 1;
+  }
+  output.push_str(&destination[copied..]);
+
+  if wrapped {
+    output.push('>');
+  }
+}
+
+fn write_markdown_resource(
+  output: &mut String,
+  destination: &str,
+  title: Option<&str>,
+  in_table_cell: bool,
+) {
+  output.push('(');
+  write_markdown_destination(output, destination, in_table_cell);
+  if let Some(title) = title
+    && !title.is_empty()
+  {
+    output.push_str(" \"");
+    write_markdown_resource_text(output, title, &TITLE_ESCAPES, in_table_cell);
+    output.push('"');
+  }
+  output.push(')');
+}
+
+fn write_markdown_resource_text(
+  output: &mut String,
+  value: &str,
+  escapes: &[u8; 16],
+  in_table_cell: bool,
+) {
   let bytes = value.as_bytes();
   let mut copied = 0usize;
   let mut index = 0usize;
   while index < bytes.len() {
     let byte = bytes[index];
-    if byte < 128 && escapes[(byte >> 3) as usize] & (1 << (byte & 7)) != 0 {
+    let control = byte < 0x20 || byte == 0x7F;
+    let entity = byte == b'&' && is_entity_reference_after_ampersand(&bytes[index + 1..]);
+    let escaped = byte < 128
+      && (escapes[(byte >> 3) as usize] & (1 << (byte & 7)) != 0
+        || (in_table_cell && byte == b'|'));
+    if control || entity || escaped {
       output.push_str(&value[copied..index]);
-      output.push('\\');
-      copied = index;
+      if control {
+        write_resource_control(output, byte);
+      } else {
+        output.push('\\');
+        output.push(byte as char);
+      }
+      copied = index + 1;
     }
     index += 1;
   }
   output.push_str(&value[copied..]);
 }
 
-fn write_markdown_destination(output: &mut String, destination: &str) {
-  let bytes = destination.as_bytes();
-  let mut index = 0usize;
-  while index < bytes.len()
-    && !matches!(
-      bytes[index],
-      b'\t' | b'\n' | 0x0C | b'\r' | b' ' | b'(' | b')' | b'\\' | b'<' | b'>'
-    )
-  {
-    index += 1;
-  }
-  if index == bytes.len() {
-    output.push_str(destination);
-    return;
-  }
-
-  output.push('<');
-  write_ascii_escaped(output, destination, &DESTINATION_ESCAPES);
-  output.push('>');
-}
-
-fn write_markdown_resource(output: &mut String, destination: &str, title: Option<&str>) {
-  output.push('(');
-  write_markdown_destination(output, destination);
-  if let Some(title) = title
-    && !title.is_empty()
-  {
-    output.push_str(" \"");
-    write_ascii_escaped(output, title, &TITLE_ESCAPES);
-    output.push('"');
-  }
-  output.push(')');
-}
-
-fn write_image_description(output: &mut String, alt: &str) {
-  write_ascii_escaped(output, alt, &IMAGE_DESCRIPTION_ESCAPES);
+fn write_image_description(output: &mut String, alt: &str, in_table_cell: bool) {
+  write_markdown_resource_text(output, alt, &IMAGE_DESCRIPTION_ESCAPES, in_table_cell);
 }
 
 #[inline]
@@ -851,7 +936,11 @@ impl ConvertState {
         // directly at the `[` byte (set in emit_enter_element), so this
         // is an O(1) check. `[` is single-byte UTF-8, so `bp + 1` is
         // always a char boundary once `buf_bytes[bp]` is confirmed `[`.
-        if title.is_empty() && is_autolink_uri(&resolved) {
+        let in_table_cell = self.in_table_cell();
+        if title.is_empty()
+          && is_autolink_uri(&resolved)
+          && !destination_needs_safety_serialization(&resolved, in_table_cell)
+        {
           let bp = self.link_bracket_pos;
           let buf_bytes = self.buffer.as_bytes();
           if bp < buf_bytes.len()
@@ -872,6 +961,7 @@ impl ConvertState {
           &mut self.buffer,
           &resolved,
           (!title.is_empty()).then_some(title),
+          in_table_cell,
         );
         self.last_content_cache_len = self.buffer.len(); // will be recalculated
       }
@@ -1241,9 +1331,9 @@ impl ConvertState {
       // A `\&` guarding a decoded entity reference is emitted by the entity
       // decoder; preserve the pair verbatim so this pass never doubles the slash.
       if byte == b'\\'
-        && bytes
-          .get(index + 1)
-          .is_some_and(|&next| next == b'&' && Self::is_entity_reference_after_ampersand(&bytes[index + 1..]))
+        && bytes.get(index + 1).is_some_and(|&next| {
+          next == b'&' && is_entity_reference_after_ampersand(&bytes[index + 2..])
+        })
       {
         line_indent = None;
         ordered_digits = 0;
@@ -1356,32 +1446,6 @@ impl ConvertState {
       }
     }
     count >= 3
-  }
-
-  #[inline]
-  fn is_entity_reference_after_ampersand(value: &[u8]) -> bool {
-    let mut index = 1usize;
-    if value.get(index) == Some(&b'#') {
-      index += 1;
-      let hex = matches!(value.get(index), Some(b'x' | b'X'));
-      if hex {
-        index += 1;
-      }
-      let start = index;
-      while let Some(&byte) = value.get(index) {
-        if byte.is_ascii_digit() || (hex && byte.is_ascii_hexdigit()) {
-          index += 1;
-        } else {
-          break;
-        }
-      }
-      return index > start && value.get(index) == Some(&b';');
-    }
-    let start = index;
-    while value.get(index).is_some_and(u8::is_ascii_alphanumeric) {
-      index += 1;
-    }
-    index > start && value.get(index) == Some(&b';')
   }
 
   /// Current leading-space count when a GFM block marker may start here.
@@ -1818,9 +1882,10 @@ impl ConvertState {
             alt.len() + resolved_src.len() + title.map_or(5, |title| title.len() + 8),
           );
           s.push_str("![");
-          write_image_description(&mut s, alt);
+          let in_table_cell = self.in_table_cell();
+          write_image_description(&mut s, alt, in_table_cell);
           s.push(']');
-          write_markdown_resource(&mut s, &resolved_src, title);
+          write_markdown_resource(&mut s, &resolved_src, title, in_table_cell);
           Some(Cow::Owned(s))
         }
       }

@@ -21,7 +21,7 @@ pub(crate) fn is_autolink_uri(s: &str) -> bool {
     return false;
   }
   !s.bytes()
-    .any(|b| b == b' ' || b == b'<' || b == b'>' || b == b'\n' || b == b'\r' || b == b'\t')
+    .any(|b| b <= b' ' || b == 0x7F || b == b'<' || b == b'>')
 }
 
 /// Check if a query parameter key is a tracking parameter.
@@ -255,6 +255,8 @@ mod tests {
     // whitespace / angle brackets break autolink syntax
     assert!(!is_autolink_uri("https://example.com/a b"));
     assert!(!is_autolink_uri("https://example.com/<x>"));
+    assert!(!is_autolink_uri("https://example.com/a\u{1}b"));
+    assert!(!is_autolink_uri("https://example.com/a\u{7F}b"));
   }
 
   #[test]

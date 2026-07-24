@@ -6,6 +6,37 @@ import {
   MAX_LEGACY_ENTITY_NAME_LENGTH,
 } from './entities'
 
+export function isEntityReferenceAfterAmpersand(value: string, ampersand: number): boolean {
+  let index = ampersand + 1
+  if (value.charCodeAt(index) === 35) {
+    index++
+    const hex = value.charCodeAt(index) === 120 || value.charCodeAt(index) === 88
+    if (hex)
+      index++
+    const start = index
+    while (index < value.length) {
+      const code = value.charCodeAt(index)
+      if (!((code >= 48 && code <= 57)
+        || (hex && ((code >= 65 && code <= 70) || (code >= 97 && code <= 102))))) {
+        break
+      }
+      index++
+    }
+    return index > start && value.charCodeAt(index) === 59
+  }
+  const start = index
+  while (index < value.length) {
+    const code = value.charCodeAt(index)
+    if (!((code >= 48 && code <= 57)
+      || (code >= 65 && code <= 90)
+      || (code >= 97 && code <= 122))) {
+      break
+    }
+    index++
+  }
+  return index > start && value.charCodeAt(index) === 59
+}
+
 function equalsAsciiCaseInsensitive(value: string, expected: string): boolean {
   for (let index = 0; index < expected.length; index++) {
     if ((value.charCodeAt(index) | 32) !== expected.charCodeAt(index))
