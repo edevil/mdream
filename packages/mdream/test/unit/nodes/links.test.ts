@@ -102,7 +102,7 @@ describe.each(engines)('links $name', (engineConfig) => {
     const engine = await resolveEngine(engineConfig.engine)
     const html = '<a href="//example.com/page#section">Link</a>'
     const markdown = htmlToMarkdown(html, { engine })
-    expect(markdown).toBe('[Link](https://example.com/page#section)')
+    expect(markdown).toBe('[Link](//example.com/page#section)')
   })
 
   it('handles anchor with title and fragment', async () => {

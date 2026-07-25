@@ -2,6 +2,7 @@
 #![allow(unsafe_code)]
 
 use std::alloc::{GlobalAlloc, Layout, System};
+use std::fmt::Write as _;
 use std::hint::black_box;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
@@ -105,12 +106,10 @@ fn frontmatter_commits_without_blocking_body_drain() {
   }
   output.push_str(&stream.finish());
 
-  let html = format!(
-    "{head}{}",
-    (0..128)
-      .map(|index| format!("<p>body {index}</p>"))
-      .collect::<String>()
-  );
+  let mut html = head.to_string();
+  for index in 0..128 {
+    let _ = write!(html, "<p>body {index}</p>");
+  }
   assert_eq!(output, html_to_markdown(&html, options));
 }
 
@@ -152,7 +151,7 @@ fn self_link_heading_cleanup_is_streaming_invariant() {
     ..Default::default()
   };
 
-  assert_stream_matches_every_split(html, options);
+  assert_stream_matches_every_split(html, &options);
 }
 
 // Compares chunked streaming against one-shot, so it excludes the
@@ -191,7 +190,7 @@ fn streamed_output_matches_one_shot() {
 
 // Streaming must equal one-shot for these parse-layer cases (drain-transparent).
 // Each asserts across chunk sizes so a boundary landing anywhere is covered.
-fn assert_stream_matches(html: &str, opts: HTMLToMarkdownOptions) {
+fn assert_stream_matches(html: &str, opts: &HTMLToMarkdownOptions) {
   let expected = html_to_markdown(html, opts.clone());
   for chunk in 1..=html.len().max(1) {
     assert_eq!(
@@ -202,7 +201,7 @@ fn assert_stream_matches(html: &str, opts: HTMLToMarkdownOptions) {
   }
 }
 
-fn assert_stream_matches_every_split(html: &str, opts: HTMLToMarkdownOptions) {
+fn assert_stream_matches_every_split(html: &str, opts: &HTMLToMarkdownOptions) {
   let expected = html_to_markdown(html, opts.clone());
   for split in (0..=html.len()).filter(|&split| html.is_char_boundary(split)) {
     let mut stream = MarkdownStreamProcessor::new(opts.clone());
@@ -215,7 +214,7 @@ fn assert_stream_matches_every_split(html: &str, opts: HTMLToMarkdownOptions) {
 
 #[test]
 fn streaming_every_split_supports_multibyte_html() {
-  assert_stream_matches_every_split("<p>café 😀</p>", HTMLToMarkdownOptions::default());
+  assert_stream_matches_every_split("<p>café 😀</p>", &HTMLToMarkdownOptions::default());
 }
 
 #[test]
@@ -230,7 +229,7 @@ fn streaming_gfm_hard_break_matches_every_split() {
     "<address>first<br>second</address>",
     "<code>first<br>second</code>",
   ] {
-    assert_stream_matches_every_split(html, HTMLToMarkdownOptions::default());
+    assert_stream_matches_every_split(html, &HTMLToMarkdownOptions::default());
   }
 }
 
@@ -242,7 +241,7 @@ fn streaming_blockquote_structure_matches_every_split() {
     "<blockquote><ul><li>one<ul><li>sub</li></ul></li></ul></blockquote>",
     "<ul><li><blockquote><ul><li>x</li><li>y</li></ul></blockquote></li></ul>",
   ] {
-    assert_stream_matches_every_split(html, HTMLToMarkdownOptions::default());
+    assert_stream_matches_every_split(html, &HTMLToMarkdownOptions::default());
   }
 }
 
@@ -275,7 +274,7 @@ fn streaming_does_not_re_escape_carried_text() {
     "<table><tr><td>a`b</td><td>c\\d</td></tr></table>",
     r#"<p>text with <a href="/x">a [bracket] link</a> end</p>"#,
   ] {
-    assert_stream_matches(html, HTMLToMarkdownOptions::default());
+    assert_stream_matches(html, &HTMLToMarkdownOptions::default());
   }
 }
 
@@ -283,7 +282,7 @@ fn streaming_does_not_re_escape_carried_text() {
 fn streaming_gfm_text_escaping_matches_every_split() {
   assert_stream_matches(
     r"<p>&#35; heading [label](url) and *bar* ~~baz~~ `qux` &amp;copy;</p><p>> quote</p><p>1. item</p><p>---</p>",
-    HTMLToMarkdownOptions::default(),
+    &HTMLToMarkdownOptions::default(),
   );
 }
 
@@ -297,7 +296,7 @@ fn streaming_gfm_link_and_image_serialization_matches_every_split() {
     r#"<img src="/x.png" alt="a ] \ *bold* _em_ &#96;code&#96;">"#,
     r#"<img src="/x.png" alt="alt" title="say &quot;hi&quot; \ path">"#,
   ] {
-    assert_stream_matches(html, HTMLToMarkdownOptions::default());
+    assert_stream_matches(html, &HTMLToMarkdownOptions::default());
   }
 }
 
@@ -307,7 +306,7 @@ fn streaming_code_delimiter_widening_matches_every_split() {
     "<p>before <code>a `b` c</code> after</p>",
     "<pre><code>before\n```line-leading\n````\nafter</code></pre>",
   ] {
-    assert_stream_matches(html, HTMLToMarkdownOptions::default());
+    assert_stream_matches(html, &HTMLToMarkdownOptions::default());
   }
 }
 
@@ -320,7 +319,7 @@ fn streaming_keeps_list_marker_after_code_block() {
     "<ul><li>one<pre><code>cmd</code></pre></li><li>two</li></ul>",
     "<ol><li>one<pre><code>a</code></pre></li><li>two</li><li>three</li></ol>",
   ] {
-    assert_stream_matches(html, HTMLToMarkdownOptions::default());
+    assert_stream_matches(html, &HTMLToMarkdownOptions::default());
   }
 }
 
@@ -332,7 +331,7 @@ fn streaming_keeps_closing_fence_after_cleaned_empty_link_in_pre() {
   };
   assert_stream_matches(
     r#"<pre><code>b c<em></em><a href="/x"><svg></svg></a></code></pre>"#,
-    opts,
+    &opts,
   );
 }
 
@@ -344,7 +343,7 @@ fn streaming_keeps_raw_close_tag_after_foreign_child() {
     "<summary>text <svg></svg></summary>",
     "<details><summary>text <svg><polyline points=\"1 2\"></polyline></svg></summary><p>b</p></details>",
   ] {
-    assert_stream_matches(html, HTMLToMarkdownOptions::default());
+    assert_stream_matches(html, &HTMLToMarkdownOptions::default());
   }
 }
 
@@ -360,7 +359,7 @@ fn streaming_drops_script_without_disturbing_neighbors() {
     r#"<p>x</p><script>let s = "</scr" + "ipt>end";</script><p>y</p>"#,
     "<p>one</p><script>\n  line1\n  line2\n</script><p>two</p>",
   ] {
-    assert_stream_matches(html, HTMLToMarkdownOptions::default());
+    assert_stream_matches(html, &HTMLToMarkdownOptions::default());
   }
 }
 
@@ -374,7 +373,22 @@ fn streaming_lexical_carry_matches_every_split() {
     "<p>&copy;cat &#65copy; &#x41zz; &bogus;</p>",
     "<p>--- not a rule</p><p>123456789. item</p>",
   ] {
-    assert_stream_matches_every_split(html, HTMLToMarkdownOptions::default());
+    assert_stream_matches_every_split(html, &HTMLToMarkdownOptions::default());
+  }
+}
+
+#[test]
+fn streaming_keeps_entities_across_the_incremental_text_window() {
+  for entity in ["&nbsp;", "&#160;"] {
+    for prefix_len in 58..=64 {
+      let html = format!("<p>{}{entity}in</p>", "x".repeat(prefix_len));
+      let expected = html_to_markdown(&html, HTMLToMarkdownOptions::default());
+      assert!(
+        expected.contains('\u{a0}'),
+        "entity was not decoded: {html:?}"
+      );
+      assert_stream_matches_every_split(&html, &HTMLToMarkdownOptions::default());
+    }
   }
 }
 
@@ -511,6 +525,7 @@ fn best_wrapped_inline_time(repetitions: usize) -> Duration {
 
 #[test]
 #[ignore = "release-mode scaling probe"]
+#[allow(clippy::assertions_on_constants)]
 fn wrapped_inline_runs_scale_near_linearly() {
   assert!(!cfg!(debug_assertions), "run this probe with --release");
   let n = best_wrapped_inline_time(20_000);
@@ -641,9 +656,7 @@ fn streaming_keeps_trailing_nbsp_before_sibling() {
 fn streaming_keeps_raw_block_close_after_drain() {
   let mut html = String::from("<article>");
   for i in 0..400 {
-    html.push_str(&format!(
-      "<p>Filler paragraph number {i} with some words.</p>"
-    ));
+    let _ = write!(html, "<p>Filler paragraph number {i} with some words.</p>");
   }
   html.push_str(
     "<dl><dt>MPN:</dt><dd>D100-V36-PBO-1WZ</dd>\
@@ -668,9 +681,7 @@ fn streaming_keeps_raw_block_close_after_drain() {
 fn drain_filler() -> String {
   let mut s = String::new();
   for i in 0..400 {
-    s.push_str(&format!(
-      "<p>Filler paragraph number {i} with some words.</p>"
-    ));
+    let _ = write!(s, "<p>Filler paragraph number {i} with some words.</p>");
   }
   s
 }

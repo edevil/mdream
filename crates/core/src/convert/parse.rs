@@ -375,6 +375,7 @@ impl ConvertState {
   }
 
   pub(crate) fn process_text_buffer(&mut self, text_buffer: &mut String) {
+    self.pending_entity_start = None;
     let contains_non_whitespace = self.text_buffer_contains_non_whitespace;
     let contains_whitespace = self.text_buffer_contains_whitespace;
     let has_inline_gfm_hazard =

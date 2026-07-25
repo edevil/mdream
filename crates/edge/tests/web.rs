@@ -1,3 +1,5 @@
+use std::fmt::Write as _;
+
 use wasm_bindgen_test::*;
 
 wasm_bindgen_test_configure!(run_in_browser);
@@ -120,7 +122,7 @@ fn streaming() {
 fn large_document() {
   let mut html = String::with_capacity(10000);
   for i in 0..100 {
-    html.push_str(&format!("<p>Paragraph {i} with some content.</p>"));
+    let _ = write!(html, "<p>Paragraph {i} with some content.</p>");
   }
   let result = convert(&html);
   assert!(result.contains("Paragraph 0"));

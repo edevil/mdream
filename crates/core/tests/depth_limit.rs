@@ -125,7 +125,7 @@ fn malformed_closes_do_not_unbalance_capped_output() {
 
 #[test]
 fn skipped_cdata_override_does_not_leave_overflow_active() {
-  let html = format!("{}<![CDATA[hidden]]><p>kept</p>", "<div>".repeat(LIMIT),);
+  let html = format!("{}<![CDATA[hidden]]><p>kept</p>", "<div>".repeat(LIMIT));
   let options = HTMLToMarkdownOptions {
     plugins: Some(PluginConfig {
       tag_overrides: Some(vec![(

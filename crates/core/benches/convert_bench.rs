@@ -1,9 +1,11 @@
+#![allow(clippy::cast_precision_loss)]
+
 use std::time::Instant;
 
 fn bench(
   label: &str,
   html: &str,
-  opts: mdream::types::HTMLToMarkdownOptions,
+  opts: &mdream::types::HTMLToMarkdownOptions,
   iterations: u32,
 ) -> f64 {
   let size_kb = html.len() as f64 / 1024.0;
@@ -55,7 +57,7 @@ fn run_stream(html: &str, opts: mdream::types::HTMLToMarkdownOptions, chunk: usi
 fn bench_stream(
   label: &str,
   html: &str,
-  opts: mdream::types::HTMLToMarkdownOptions,
+  opts: &mdream::types::HTMLToMarkdownOptions,
   chunk: usize,
   iterations: u32,
 ) {
@@ -145,13 +147,8 @@ fn main() {
   );
 
   for (label, html) in &fixtures {
-    let d = bench(
-      &format!("{label} default"),
-      html,
-      default_opts.clone(),
-      iters,
-    );
-    let c = bench(&format!("{label} clean"), html, clean_opts.clone(), iters);
+    let d = bench(&format!("{label} default"), html, &default_opts, iters);
+    let c = bench(&format!("{label} clean"), html, &clean_opts, iters);
     let overhead = ((c - d) / d) * 100.0;
     // Reprint as table row
     println!(
@@ -178,14 +175,14 @@ fn main() {
       bench_stream(
         &format!("{label} default @ {}KB", chunk / 1024),
         html,
-        default_opts.clone(),
+        &default_opts,
         chunk,
         iters,
       );
       bench_stream(
         &format!("{label} clean @ {}KB", chunk / 1024),
         html,
-        stream_clean_opts.clone(),
+        &stream_clean_opts,
         chunk,
         iters,
       );

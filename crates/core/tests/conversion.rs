@@ -3,6 +3,7 @@ use mdream::types::{
   OutputFormat, PluginConfig, TagOverrideConfig, UrlPolicy,
 };
 use mdream::{MarkdownStreamProcessor, html_to_markdown, html_to_markdown_result, html_to_text};
+use std::fmt::Write as _;
 
 fn convert(html: &str) -> String {
   html_to_markdown(html, HTMLToMarkdownOptions::default())
@@ -317,11 +318,11 @@ fn link_with_title() {
 #[test]
 fn gfm_links_have_reparsable_destinations_and_titles() {
   for (html, expected) in [
-    (r#"<a href="">text</a>"#, r#"[text]()"#),
-    (r#"<a href="docs/a b">text</a>"#, r#"[text](<docs/a b>)"#),
+    (r#"<a href="">text</a>"#, r"[text]()"),
+    (r#"<a href="docs/a b">text</a>"#, r"[text](<docs/a b>)"),
     (
       r#"<a href="docs/(a)\file">text</a>"#,
-      r#"[text](<docs/(a)\\file>)"#,
+      r"[text](<docs/(a)\\file>)",
     ),
     (
       r#"<a href="/x" title="say &quot;hi&quot; \ path">text</a>"#,
@@ -1141,7 +1142,7 @@ fn loose_ordered_list_with_code_block_renders_as_commonmark_loose_list() {
   // The user's reproducer from issue #77. With 3-space indent the markdown
   // renders in CommonMark as a 2-item list with nested code block; with the
   // old 2-space indent the code block fell outside the list entirely.
-  let html = r#"
+  let html = r"
 <ol>
 <li>
 <p>text</p>
@@ -1152,7 +1153,7 @@ fn loose_ordered_list_with_code_block_renders_as_commonmark_loose_list() {
 <p>text</p>
 </li>
 </ol>
-"#;
+";
   assert_eq!(
     convert(html),
     "1. text\n\n   ```\n   text\n   ```\n\n   text\n2. text"
@@ -1162,7 +1163,7 @@ fn loose_ordered_list_with_code_block_renders_as_commonmark_loose_list() {
 // https://github.com/harlan-zw/mdream/issues/81
 #[test]
 fn multiple_paragraphs_in_list_item_separated_by_blank_lines() {
-  let html = r#"
+  let html = r"
 <ol>
     <li>
         <p><strong>text</strong>:</p>
@@ -1171,7 +1172,7 @@ fn multiple_paragraphs_in_list_item_separated_by_blank_lines() {
         <pre><code>text</code></pre>
     </li>
 </ol>
-"#;
+";
   assert_eq!(
     convert(html),
     "1. **text**:\n\n   text\n\n   text\n\n   ```\n   text\n   ```"
@@ -1444,10 +1445,8 @@ fn strips_script() {
 
 #[test]
 fn strips_style() {
-  assert_eq!(
-    convert("<p>Before</p><style>.x{color:red}</style><p>After</p>"),
-    "Before\n\nAfter"
-  );
+  const HTML: &str = "<p>Before</p><style>.x{color:red}</style><p>After</p>";
+  assert_eq!(convert(HTML), "Before\n\nAfter");
 }
 
 #[test]
@@ -1631,13 +1630,13 @@ fn streaming_empty() {
 fn large_table() {
   let mut html = String::from("<table><tr>");
   for i in 0..10 {
-    html.push_str(&format!("<th>Col{i}</th>"));
+    write!(html, "<th>Col{i}</th>").unwrap();
   }
   html.push_str("</tr>");
   for _ in 0..100 {
     html.push_str("<tr>");
     for i in 0..10 {
-      html.push_str(&format!("<td>Val{i}</td>"));
+      write!(html, "<td>Val{i}</td>").unwrap();
     }
     html.push_str("</tr>");
   }
@@ -1953,7 +1952,7 @@ fn filter_exclude_empty_link_title_in_footer() {
           exclude: Some(vec!["footer".to_string()]),
           ..Default::default()
         }),
-        isolate_main: Some(IsolateMainConfig::default()),
+        isolate_main: Some(IsolateMainConfig),
         ..Default::default()
       }),
       ..Default::default()

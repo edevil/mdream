@@ -28,6 +28,7 @@ fn as_string_vec(v: &JsValue) -> Option<Vec<String>> {
   Some(out)
 }
 
+#[allow(clippy::cast_possible_truncation)]
 fn as_spacing(v: &JsValue) -> Result<Option<[u8; 2]>, JsValue> {
   if v.is_undefined() || v.is_null() {
     return Ok(None);
@@ -42,8 +43,8 @@ fn as_spacing(v: &JsValue) -> Result<Option<[u8; 2]>, JsValue> {
     );
   }
   let mut out = [0; 2];
-  for (index, value) in out.iter_mut().enumerate() {
-    let Some(number) = arr.get(index as u32).as_f64() else {
+  for (index, value) in (0..2).zip(&mut out) {
+    let Some(number) = arr.get(index).as_f64() else {
       return Err(js_sys::TypeError::new("Tag override spacing values must be numbers").into());
     };
     if !number.is_finite() || number.fract() != 0.0 || !(0.0..=255.0).contains(&number) {
@@ -134,6 +135,7 @@ fn parse_options(
     Some(parse_plugins(&plugins_val)?)
   };
 
+  #[allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
   let wrap_width = get_prop(options, "wrapWidth")
     .as_f64()
     .filter(|n| n.is_finite() && *n >= 0.0 && *n <= usize::MAX as f64)
@@ -273,6 +275,7 @@ fn parse_plugins(p: &JsValue) -> Result<mdream::types::PluginConfig, JsValue> {
 // ── WASM exports ──
 
 #[wasm_bindgen(js_name = "htmlToMarkdown")]
+#[allow(clippy::needless_pass_by_value)]
 pub fn html_to_markdown(html: &str, options: JsValue) -> Result<String, JsValue> {
   let (opts, format) = parse_options(&options)?;
   mdream::try_html_to_format(html, opts, format)
@@ -280,6 +283,7 @@ pub fn html_to_markdown(html: &str, options: JsValue) -> Result<String, JsValue>
 }
 
 #[wasm_bindgen(js_name = "htmlToMarkdownResult")]
+#[allow(clippy::needless_pass_by_value)]
 pub fn html_to_markdown_result(html: &str, options: JsValue) -> Result<JsValue, JsValue> {
   let (opts, format) = parse_options(&options)?;
   let result = mdream::try_html_to_format_result(html, opts, format)
@@ -325,6 +329,7 @@ pub struct MarkdownStream {
 #[wasm_bindgen]
 impl MarkdownStream {
   #[wasm_bindgen(constructor)]
+  #[allow(clippy::needless_pass_by_value)]
   pub fn new(options: JsValue) -> Result<Self, JsValue> {
     let (opts, format) = parse_options(&options)?;
     Ok(Self {

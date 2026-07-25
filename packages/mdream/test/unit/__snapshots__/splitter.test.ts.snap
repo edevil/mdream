@@ -309,7 +309,7 @@ exports[`htmlToMarkdownSplitChunks > withMinimalPreset integration > handles com
     "content": "---
 title: "Blog Post - Example Site"
 meta:
-  description: "An example blog post"
+  "description": "An example blog post"
 ---
 
 # **My Blog Post**

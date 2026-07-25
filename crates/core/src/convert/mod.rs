@@ -548,6 +548,7 @@ pub struct ConvertState {
   pub depth_map: [u16; MAX_TAG_ID],
   pub depth: usize,
   has_encoded_html_entity: bool,
+  pending_entity_start: Option<usize>,
   last_char_was_whitespace: bool,
   text_buffer_contains_whitespace: bool,
   text_buffer_contains_non_whitespace: bool,
@@ -802,6 +803,7 @@ impl ConvertState {
       depth_map: [0; MAX_TAG_ID],
       depth: 0,
       has_encoded_html_entity: false,
+      pending_entity_start: None,
       last_char_was_whitespace: true,
       text_buffer_contains_whitespace: false,
       text_buffer_contains_non_whitespace: false,
@@ -1015,9 +1017,44 @@ impl ConvertState {
     if !self.incremental_lexing || text_buffer.len() < TEXT_LOOKBEHIND {
       return false;
     }
+    if self.has_pending_entity_suffix(text_buffer) {
+      return false;
+    }
     self.process_text_buffer(text_buffer);
     text_buffer.clear();
     true
+  }
+
+  fn has_pending_entity_suffix(&mut self, text_buffer: &str) -> bool {
+    let Some(start) = self.pending_entity_start else {
+      return false;
+    };
+    let bytes = &text_buffer.as_bytes()[start..];
+    let pending = if let Some(semicolon) = bytes.iter().position(|&byte| byte == b';') {
+      let lookahead = &bytes[semicolon + 1..];
+      lookahead.is_empty()
+        || (lookahead.len() <= max_entity_name_length() + 2
+          && lookahead
+            .iter()
+            .enumerate()
+            .all(|(index, byte)| byte.is_ascii_alphanumeric() || index == 0 && *byte == b'#'))
+    } else if bytes.len() == 1 {
+      true
+    } else if bytes[1] == b'#' {
+      let hex = matches!(bytes.get(2), Some(b'x' | b'X'));
+      let digit_start = 2 + usize::from(hex);
+      bytes.len() == digit_start
+        || bytes
+          .last()
+          .is_some_and(|byte| byte.is_ascii_digit() || hex && byte.is_ascii_hexdigit())
+    } else {
+      bytes.len() - 1 <= max_entity_name_length()
+        && bytes.last().is_some_and(u8::is_ascii_alphanumeric)
+    };
+    if !pending {
+      self.pending_entity_start = None;
+    }
+    pending
   }
 
   pub(crate) fn retained_buffered_bytes(&self) -> usize {
@@ -2054,6 +2091,7 @@ impl ConvertState {
               carry = true;
               break;
             }
+            self.pending_entity_start = Some(text_buffer.len());
             self.has_encoded_html_entity = true;
           }
         }
@@ -2466,6 +2504,7 @@ impl ConvertState {
     if carry {
       let leftover = chunk[run_start..].to_string();
       text_buffer.clear();
+      self.pending_entity_start = None;
       self.parse_text_buffer = if self.streaming_limit.is_some() && text_buffer.is_empty() {
         String::new()
       } else {

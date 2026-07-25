@@ -1,3 +1,5 @@
+#![allow(clippy::cast_precision_loss)]
+
 fn count_tokens_approx(text: &str) -> usize {
   let mut tokens = 0;
   let mut in_word = false;

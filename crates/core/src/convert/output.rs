@@ -516,7 +516,7 @@ impl ConvertState {
       }
     }
     let Some((start, colspan)) =
-      selected.or(first_run.map(|(start, run)| (start, requested_colspan.min(run))))
+      selected.or_else(|| first_run.map(|(start, run)| (start, requested_colspan.min(run))))
     else {
       if self.streaming_limit.is_some() {
         self.fail_streaming(StreamingError::ParserLimitExceeded);
@@ -545,7 +545,7 @@ impl ConvertState {
   fn finish_table_cell(&mut self) {
     let start = self.table_current_cell_start;
     let end = start + self.table_current_cell_colspan;
-    let rowspan = self.table_current_cell_rowspan as u16;
+    let rowspan = u16::try_from(self.table_current_cell_rowspan).unwrap_or(u16::MAX);
     for value in &mut self.table_rowspans[start..end] {
       *value = (*value).max(rowspan);
     }
@@ -952,7 +952,9 @@ impl ConvertState {
     if !has_override {
       // Special case: TR table separator
       if tag_id == Some(TAG_TR) && !self.plain_text && self.depth_map[TAG_TABLE as usize] <= 1 {
-        if !self.table_rendered_table {
+        if self.table_rendered_table {
+          output = Some(Cow::Owned(self.finish_table_row(self.table_width)));
+        } else {
           self.table_rendered_table = true;
           self.table_width = self.table_current_row_cells.min(MAX_TABLE_COLUMNS);
           let col_count = self.table_width;
@@ -972,8 +974,6 @@ impl ConvertState {
             sep.push_str(" |");
           }
           table_separator = Some(sep);
-        } else {
-          output = Some(Cow::Owned(self.finish_table_row(self.table_width)));
         }
       } else if self.plain_text || tag_id != Some(TAG_A) {
         output = self.get_exit_output(node);
@@ -1110,10 +1110,8 @@ impl ConvertState {
         self.truncate_output(link.bracket_start + link.text_len);
         self.last_content_start = Some(link.bracket_start);
       }
-      if !slug.is_empty() {
-        if !self.push_heading_slug(slug) {
-          return;
-        }
+      if !slug.is_empty() && !self.push_heading_slug(slug) {
+        return;
       }
       self.in_heading = false;
     }
@@ -2832,7 +2830,7 @@ mod tests {
   fn empty_drained_buffer_counts_two_flushed_newlines() {
     let mut state = ConvertState::new(HTMLToMarkdownOptions::default(), 64, OutputFormat::Markdown);
     state.has_streamed_output = true;
-    state.flushed_tail = [b'\n', b'\n'];
+    state.flushed_tail = *b"\n\n";
 
     state.write_output(true, false, 2, Some("next"), false);
 
