@@ -1,0 +1,21 @@
+crates/core/src/convert/parse.rs
+  s_6452cdb8b6939f::t_50f25515ac1b0e 251-253,255,281-287,291-295
+crates/core/tests/bounded_streaming.rs
+  s_6452cdb8b6939f::t_e435c6bad98da0 408-425
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "74c376da5ab780c0dc6d4828e92f819029736e01",
+  "prompts": {},
+  "sessions": {
+    "s_6452cdb8b6939f": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_0659e1424ffe1WiFw1lWamGTyj",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "André Cruz <acruz@cloudflare.com>"
+    }
+  }
+}
