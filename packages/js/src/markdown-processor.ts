@@ -120,6 +120,37 @@ interface BlockquoteFrame {
   listIndent: string
 }
 
+interface BufferPosition {
+  ordinal: number
+  offset: number
+}
+
+interface LineContext {
+  column: number
+  markdownIndent: number
+  trailingHighSurrogate: boolean
+}
+
+interface CompactResult {
+  emitted: BufferPosition
+  retainedContext: LineContext
+}
+
+interface FragmentRange {
+  fragment: number
+  start: number
+  end: number
+  value: string
+}
+
+interface RewriteAnchorSnapshot {
+  markers: FragmentRange[]
+  spans: FragmentRange[]
+  fence?: FragmentRange
+  blockquotes: FragmentRange[]
+  link?: FragmentRange
+}
+
 interface GfmLifecycleState {
   openCodeSpans: CodeSpan[]
 }
@@ -331,7 +362,7 @@ function escapeRawHtmlText(value: string, depthMap: Uint8Array): string {
  * this position. A non-space byte, or more than three leading spaces, makes
  * the position ordinary inline text.
  */
-function markdownLineIndent(buffer: string[]): number {
+function markdownLineIndent(buffer: string[], baseIndent = 0): number {
   let spaces = 0
   for (let fragmentIndex = buffer.length - 1; fragmentIndex >= 0; fragmentIndex--) {
     const fragment = buffer[fragmentIndex]!
@@ -345,7 +376,7 @@ function markdownLineIndent(buffer: string[]): number {
         return -1
     }
   }
-  return spaces <= 3 ? spaces : -1
+  return baseIndent >= 0 && baseIndent + spaces <= 3 ? baseIndent + spaces : -1
 }
 
 function isMarkdownMarkerWhitespace(code: number): boolean {
@@ -384,7 +415,7 @@ const GFM_TEXT_NATIVE_TRIGGER = /[\\*_~`[<\r\n]/
  * precise JavaScript scanner. A block marker can only begin within the first
  * four characters here; later lines are covered by the newline trigger.
  */
-function mayNeedGfmTextEscape(value: string, buffer: string[], depthMap: Uint8Array): boolean {
+function mayNeedGfmTextEscape(value: string, buffer: string[], depthMap: Uint8Array, baseIndent = 0): boolean {
   if (value.search(GFM_TEXT_NATIVE_TRIGGER) !== -1)
     return true
   if ((depthMap[TAG_TABLE] && value.includes('|'))
@@ -393,7 +424,7 @@ function mayNeedGfmTextEscape(value: string, buffer: string[], depthMap: Uint8Ar
     return true
   }
 
-  let lineIndent = markdownLineIndent(buffer)
+  let lineIndent = markdownLineIndent(buffer, baseIndent)
   if (lineIndent < 0)
     return false
 
@@ -418,11 +449,11 @@ function mayNeedGfmTextEscape(value: string, buffer: string[], depthMap: Uint8Ar
  * markers never pass through here, while code and raw-HTML contexts bypass it.
  * The common plain-text path returns the original string without allocation.
  */
-function escapeGfmText(value: string, buffer: string[], depthMap: Uint8Array): string {
+function escapeGfmText(value: string, buffer: string[], depthMap: Uint8Array, baseIndent = 0): string {
   const inTable = Boolean(depthMap[TAG_TABLE])
   const inLink = Boolean(depthMap[TAG_A])
   const inBlockquote = Boolean(depthMap[TAG_BLOCKQUOTE])
-  let lineIndent = markdownLineIndent(buffer)
+  let lineIndent = markdownLineIndent(buffer, baseIndent)
   let orderedDigits = 0
   let copiedUntil = 0
   let escaped = ''
@@ -515,17 +546,31 @@ function escapeGfmText(value: string, buffer: string[], depthMap: Uint8Array): s
  * since the last newline across the buffer chunks. Includes any block prefix
  * (`> `, list indent) already written for the line.
  */
-function currentColumn(buffer: string[]): number {
+function currentColumn(buffer: string[], baseColumn = 0, baseTrailingHighSurrogate = false): number {
   let col = 0
+  let pendingLowSurrogate = false
   for (let i = buffer.length - 1; i >= 0; i--) {
     const s = buffer[i]!
-    const nl = s.lastIndexOf('\n')
-    if (nl >= 0) {
-      return col + [...s.slice(nl + 1)].length
+    for (let index = s.length - 1; index >= 0; index--) {
+      const code = s.charCodeAt(index)
+      if (code === 10)
+        return col
+      if (code >= 0xDC00 && code <= 0xDFFF) {
+        col++
+        pendingLowSurrogate = true
+      }
+      else if (code >= 0xD800 && code <= 0xDBFF && pendingLowSurrogate) {
+        pendingLowSurrogate = false
+      }
+      else {
+        col++
+        pendingLowSurrogate = false
+      }
     }
-    col += [...s].length
   }
-  return col
+  if (pendingLowSurrogate && baseTrailingHighSurrogate)
+    col--
+  return baseColumn + col
 }
 
 /**
@@ -649,22 +694,247 @@ function trimAsciiWhitespaceEnd(value: string): string {
   return end === value.length ? value : value.slice(0, end)
 }
 
-function fragmentPosition(buffer: string[], fragment: number): number {
-  let position = 0
-  for (let index = 0; index < fragment; index++)
-    position += buffer[index]!.length
-  return position
+function compareBufferPositions(left: BufferPosition, right: BufferPosition): number {
+  return left.ordinal === right.ordinal
+    ? left.offset - right.offset
+    : left.ordinal - right.ordinal
 }
 
-function trimBufferedWhitespacePosition(content: string, position: number): number {
-  let end = Math.max(0, position)
-  while (end > 0) {
-    const code = content.charCodeAt(end - 1)
-    if (code !== 32 && code !== 10)
-      break
-    end--
+function bufferEnd(buffer: string[]): BufferPosition {
+  return { ordinal: buffer.length, offset: 0 }
+}
+
+function bufferPositionAtOffset(buffer: string[], absoluteOffset: number): BufferPosition {
+  let remaining = absoluteOffset
+  for (let ordinal = 0; ordinal < buffer.length; ordinal++) {
+    const length = buffer[ordinal]!.length
+    if (remaining <= length)
+      return { ordinal, offset: remaining }
+    remaining -= length
   }
-  return end
+  return bufferEnd(buffer)
+}
+
+function bufferOffsetAtPosition(buffer: string[], position: BufferPosition): number {
+  let offset = position.offset
+  for (let ordinal = 0; ordinal < position.ordinal && ordinal < buffer.length; ordinal++)
+    offset += buffer[ordinal]!.length
+  return offset
+}
+
+function bufferFragmentRange(buffer: string[], fragment: number): FragmentRange {
+  const start = bufferOffsetAtPosition(buffer, fragmentStart(fragment))
+  const value = buffer[fragment] || ''
+  return { fragment, start, end: start + value.length, value }
+}
+
+function splitBufferAtOffset(buffer: string[], absoluteOffset: number): void {
+  let start = 0
+  for (let ordinal = 0; ordinal < buffer.length; ordinal++) {
+    const fragment = buffer[ordinal]!
+    const end = start + fragment.length
+    if (absoluteOffset > start && absoluteOffset < end) {
+      buffer.splice(ordinal, 1, fragment.slice(0, absoluteOffset - start), fragment.slice(absoluteOffset - start))
+      return
+    }
+    if (absoluteOffset <= end)
+      return
+    start = end
+  }
+}
+
+function bufferFragmentAtOffset(buffer: string[], absoluteOffset: number): number {
+  let start = 0
+  for (let ordinal = 0; ordinal < buffer.length; ordinal++) {
+    if (absoluteOffset === start)
+      return ordinal
+    start += buffer[ordinal]!.length
+  }
+  return buffer.length
+}
+
+function fragmentStart(fragment: number): BufferPosition {
+  return { ordinal: fragment, offset: 0 }
+}
+
+function trimBufferStart(buffer: string[], position: BufferPosition): BufferPosition {
+  let ordinal = position.ordinal
+  let offset = position.offset
+  while (ordinal < buffer.length) {
+    const fragment = buffer[ordinal]!
+    const value = fragment.slice(offset)
+    const trimmed = value.trimStart()
+    offset += value.length - trimmed.length
+    if (offset < fragment.length)
+      return { ordinal, offset }
+    ordinal++
+    offset = 0
+  }
+  return bufferEnd(buffer)
+}
+
+function retreatBufferPosition(
+  buffer: string[],
+  position: BufferPosition,
+  limit: BufferPosition,
+  predicate: (code: number) => boolean,
+): BufferPosition {
+  let ordinal = position.ordinal
+  let offset = position.offset
+  let moved = false
+  while (ordinal > limit.ordinal || (ordinal === limit.ordinal && offset > limit.offset)) {
+    if (offset === 0) {
+      if (ordinal === 0)
+        break
+      ordinal--
+      offset = buffer[ordinal]!.length
+      continue
+    }
+    if (ordinal === limit.ordinal && offset <= limit.offset)
+      break
+    if (!predicate(buffer[ordinal]!.charCodeAt(offset - 1)))
+      break
+    offset--
+    moved = true
+  }
+  return moved ? { ordinal, offset } : position
+}
+
+function retreatBufferCodeUnits(
+  buffer: string[],
+  position: BufferPosition,
+  limit: BufferPosition,
+  count: number,
+): BufferPosition {
+  let remaining = count
+  return retreatBufferPosition(buffer, position, limit, () => remaining-- > 0)
+}
+
+function bufferCodeBefore(buffer: string[], position: BufferPosition): number {
+  let ordinal = position.ordinal
+  let offset = position.offset
+  while (offset === 0) {
+    if (ordinal === 0)
+      return Number.NaN
+    ordinal--
+    offset = buffer[ordinal]!.length
+  }
+  return buffer[ordinal]!.charCodeAt(offset - 1)
+}
+
+function bufferCodeAfter(buffer: string[], position: BufferPosition): number {
+  let ordinal = position.ordinal
+  let offset = position.offset
+  while (ordinal < buffer.length) {
+    const fragment = buffer[ordinal]!
+    if (offset < fragment.length)
+      return fragment.charCodeAt(offset)
+    ordinal++
+    offset = 0
+  }
+  return Number.NaN
+}
+
+function trimBufferedWhitespacePosition(
+  buffer: string[],
+  position: BufferPosition,
+  limit: BufferPosition,
+): BufferPosition {
+  return retreatBufferPosition(buffer, position, limit, code => code === 32 || code === 10)
+}
+
+function joinBufferRange(buffer: string[], start: BufferPosition, end: BufferPosition): string {
+  if (compareBufferPositions(start, end) >= 0)
+    return ''
+  if (start.ordinal === end.ordinal)
+    return buffer[start.ordinal]!.slice(start.offset, end.offset)
+
+  let content = buffer[start.ordinal]?.slice(start.offset) || ''
+  for (let ordinal = start.ordinal + 1; ordinal < end.ordinal; ordinal++)
+    content += buffer[ordinal]!
+  if (end.offset)
+    content += buffer[end.ordinal]!.slice(0, end.offset)
+  return content
+}
+
+function lineContextAtPosition(
+  buffer: string[],
+  end: BufferPosition,
+  initial: LineContext,
+): LineContext {
+  let column = initial.column
+  let markdownIndent = initial.markdownIndent
+  let trailingHighSurrogate = initial.trailingHighSurrogate
+
+  for (let ordinal = 0; ordinal <= end.ordinal && ordinal < buffer.length; ordinal++) {
+    const fragment = buffer[ordinal]!
+    const fragmentEnd = ordinal === end.ordinal ? end.offset : fragment.length
+    for (let offset = 0; offset < fragmentEnd; offset++) {
+      const code = fragment.charCodeAt(offset)
+      if (code === 10) {
+        column = 0
+        markdownIndent = 0
+        trailingHighSurrogate = false
+        continue
+      }
+
+      if (!(code >= 0xDC00 && code <= 0xDFFF && trailingHighSurrogate))
+        column++
+      if (markdownIndent >= 0) {
+        if (code === 32 && markdownIndent < 3)
+          markdownIndent++
+        else
+          markdownIndent = -1
+      }
+      trailingHighSurrogate = code >= 0xD800 && code <= 0xDBFF
+    }
+  }
+  return { column, markdownIndent, trailingHighSurrogate }
+}
+
+function compactBuffer(
+  buffer: string[],
+  emitted: BufferPosition,
+  retainMutableFragments: boolean,
+  initialLineContext: LineContext,
+): CompactResult {
+  const start = fragmentStart(0)
+  let contextStart = retreatBufferCodeUnits(buffer, emitted, start, 2)
+  if (bufferCodeAfter(buffer, contextStart) >= 0xDC00
+    && bufferCodeAfter(buffer, contextStart) <= 0xDFFF
+    && bufferCodeBefore(buffer, contextStart) >= 0xD800
+    && bufferCodeBefore(buffer, contextStart) <= 0xDBFF) {
+    contextStart = retreatBufferCodeUnits(buffer, contextStart, start, 1)
+  }
+  if (retainMutableFragments && emitted.ordinal < buffer.length) {
+    const mutableOrdinal = emitted.ordinal
+    const mutableStart = fragmentStart(mutableOrdinal)
+    const context = compareBufferPositions(contextStart, mutableStart) < 0
+      ? joinBufferRange(buffer, contextStart, mutableStart)
+      : ''
+    const retainedContext = lineContextAtPosition(
+      buffer,
+      context ? contextStart : mutableStart,
+      initialLineContext,
+    )
+    const retained = buffer.slice(mutableOrdinal)
+    buffer.length = 0
+    if (context)
+      buffer.push(context)
+    for (const fragment of retained)
+      buffer.push(fragment)
+    return {
+      emitted: { ordinal: context ? 1 : 0, offset: emitted.offset },
+      retainedContext,
+    }
+  }
+
+  const context = joinBufferRange(buffer, contextStart, emitted)
+  const retainedContext = lineContextAtPosition(buffer, contextStart, initialLineContext)
+  buffer.length = 0
+  if (context)
+    buffer.push(context)
+  return { emitted: bufferEnd(buffer), retainedContext }
 }
 
 /** Drop the top marker when every following fragment is whitespace. */
@@ -682,51 +952,105 @@ function dropEmptyMarker(buffer: string[], packed: number, markerType: number): 
   return -1
 }
 
-function maxBacktickRun(value: string): number {
+function maxMarkerRun(buffer: string[], startFragment: number, marker: number): number {
   let max = 0
   let run = 0
-  for (let index = 0; index < value.length; index++) {
-    if (value.charCodeAt(index) === 96) {
-      run++
-      if (run > max)
-        max = run
-    }
-    else {
-      run = 0
+  for (let fragment = startFragment; fragment < buffer.length; fragment++) {
+    const value = buffer[fragment]!
+    for (let index = 0; index < value.length; index++) {
+      if (value.charCodeAt(index) === marker) {
+        run++
+        if (run > max)
+          max = run
+      }
+      else {
+        run = 0
+      }
     }
   }
   return max
 }
 
-function maxLineLeadingRun(value: string, marker: number, indent: string): number {
+function maxLineLeadingRun(buffer: string[], startFragment: number, marker: number, indent: string): number {
   let max = 0
-  let lineStart = 0
-  while (lineStart <= value.length) {
-    let index = lineStart
-    if (indent && value.startsWith(indent, index))
-      index += indent.length
-    let spaces = 0
-    while (spaces < 3 && value.charCodeAt(index) === 32) {
-      spaces++
-      index++
+  let indentProbe = ''
+  let indentResolved = !indent
+  let spaces = 0
+  let run = 0
+  let done = false
+
+  function consumeLineCode(code: number): void {
+    if (done)
+      return
+    if (run) {
+      if (code === marker) {
+        run++
+        if (run > max)
+          max = run
+      }
+      else {
+        done = true
+      }
+      return
     }
-    let run = 0
-    while (value.charCodeAt(index + run) === marker)
+    if (code === 32 && spaces < 3) {
+      spaces++
+      return
+    }
+    if (code === marker) {
       run++
-    if (run > max)
-      max = run
-    const newline = value.indexOf('\n', lineStart)
-    if (newline === -1)
-      break
-    lineStart = newline + 1
+      if (run > max)
+        max = run
+      return
+    }
+    done = true
   }
+
+  function resolveIndentProbe(): void {
+    if (indentResolved)
+      return
+    indentResolved = true
+    if (indentProbe === indent)
+      return
+    for (let index = 0; index < indentProbe.length; index++)
+      consumeLineCode(indentProbe.charCodeAt(index))
+  }
+
+  function resetLine(): void {
+    resolveIndentProbe()
+    indentProbe = ''
+    indentResolved = !indent
+    spaces = 0
+    run = 0
+    done = false
+  }
+
+  for (let fragment = startFragment; fragment < buffer.length; fragment++) {
+    const value = buffer[fragment]!
+    for (let index = 0; index < value.length; index++) {
+      const code = value.charCodeAt(index)
+      if (code === 10) {
+        resetLine()
+        continue
+      }
+      if (!indentResolved) {
+        indentProbe += value[index]
+        if (indentProbe.length === indent.length)
+          resolveIndentProbe()
+        continue
+      }
+      consumeLineCode(code)
+    }
+  }
+  resolveIndentProbe()
   return max
 }
 
 function finalizeCodeSpan(state: MarkdownState, span: CodeSpan): string {
-  const content = state.buffer.slice(span.fragment + 1).join('')
-  const delimiter = '`'.repeat(Math.max(1, maxBacktickRun(content) + 1))
-  const padded = content.startsWith('`') || content.endsWith('`')
+  const contentStart = span.fragment + 1
+  const delimiter = '`'.repeat(Math.max(1, maxMarkerRun(state.buffer, contentStart, 96) + 1))
+  const padded = bufferCodeAfter(state.buffer, fragmentStart(contentStart)) === 96
+    || bufferCodeBefore(state.buffer, bufferEnd(state.buffer)) === 96
   state.buffer[span.fragment] = `${span.prefix}${delimiter}${padded ? ' ' : ''}`
   return `${padded ? ' ' : ''}${delimiter}`
 }
@@ -744,8 +1068,7 @@ function finalizeCodeFence(state: MarkdownState): string | undefined {
   state.codeFence = undefined
   const marker = fence.language.includes('`') ? '~' : '`'
   const markerCode = marker.charCodeAt(0)
-  const content = state.buffer.slice(fence.fragment + 1).join('')
-  const delimiter = marker.repeat(Math.max(3, maxLineLeadingRun(content, markerCode, fence.indent) + 1))
+  const delimiter = marker.repeat(Math.max(3, maxLineLeadingRun(state.buffer, fence.fragment + 1, markerCode, fence.indent) + 1))
   const opening = state.buffer[fence.fragment]!
   state.buffer[fence.fragment] = `${opening.slice(0, fence.markerOffset)}${delimiter}${opening.slice(fence.markerOffset + MARKDOWN_CODE_BLOCK.length)}`
   return delimiter
@@ -967,9 +1290,54 @@ export function createMarkdownProcessor(options: EngineOptions = {}, resolvedPlu
   const gfmLifecycle: GfmLifecycleState = { openCodeSpans: [] }
   let openLinkFragment = -1
 
-  let lastYieldedLength = 0
+  let emittedPosition: BufferPosition = { ordinal: 0, offset: 0 }
+  let emittedPluginOffset = 0
+  let bufferBaseLineContext: LineContext = { column: 0, markdownIndent: 0, trailingHighSurrogate: false }
   let hasYieldedContent = false
   let preserveLeadingWhitespace = false
+
+  function captureRewriteAnchors(): RewriteAnchorSnapshot {
+    return {
+      markers: Array.from({ length: openMarkerCount }, (_, index) => bufferFragmentRange(state.buffer, openMarkers[index]! >> 3)),
+      spans: gfmLifecycle.openCodeSpans.map(span => bufferFragmentRange(state.buffer, span.fragment)),
+      fence: state.codeFence && bufferFragmentRange(state.buffer, state.codeFence.fragment),
+      blockquotes: state.blockquotes.map(frame => bufferFragmentRange(state.buffer, frame.fragment)),
+      link: openLinkFragment >= 0 ? bufferFragmentRange(state.buffer, openLinkFragment) : undefined,
+    }
+  }
+
+  function restoreRewriteAnchors(snapshot: RewriteAnchorSnapshot): void {
+    const ranges = [
+      ...snapshot.markers,
+      ...snapshot.spans,
+      ...snapshot.blockquotes,
+      ...(snapshot.fence ? [snapshot.fence] : []),
+      ...(snapshot.link ? [snapshot.link] : []),
+    ]
+    const targets = new Map<FragmentRange, FragmentRange>()
+    for (const range of ranges) {
+      const target = state.buffer[range.fragment] === range.value
+        ? bufferFragmentRange(state.buffer, range.fragment)
+        : range
+      targets.set(range, target)
+    }
+    const boundaries = [...new Set([...targets.values()].flatMap(range => [range.start, range.end]))].sort((left, right) => right - left)
+    for (const boundary of boundaries)
+      splitBufferAtOffset(state.buffer, boundary)
+
+    const restoredFragment = (range: FragmentRange): number => bufferFragmentAtOffset(state.buffer, targets.get(range)!.start)
+
+    for (let index = 0; index < snapshot.markers.length; index++)
+      openMarkers[index] = restoredFragment(snapshot.markers[index]!) << 3 | (openMarkers[index]! & 7)
+    for (let index = 0; index < snapshot.spans.length; index++)
+      gfmLifecycle.openCodeSpans[index]!.fragment = restoredFragment(snapshot.spans[index]!)
+    if (snapshot.fence && state.codeFence)
+      state.codeFence.fragment = restoredFragment(snapshot.fence)
+    for (let index = 0; index < snapshot.blockquotes.length; index++)
+      state.blockquotes[index]!.fragment = restoredFragment(snapshot.blockquotes[index]!)
+    if (snapshot.link && openLinkFragment >= 0)
+      openLinkFragment = restoredFragment(snapshot.link)
+  }
 
   function processTextNode(textNode: TextNode, lastNode: ElementNode | TextNode | undefined, lastChar: string): void {
     if (textNode.value) {
@@ -1017,8 +1385,8 @@ export function createMarkdownProcessor(options: EngineOptions = {}, resolvedPlu
         && !state.depthMap[TAG_PRE]
         && !state.depthMap[TAG_CODE]
         && !insideRawHtmlBlock
-        && mayNeedGfmTextEscape(textNode.value, state.buffer, state.depthMap)) {
-        textNode.value = escapeGfmText(textNode.value, state.buffer, state.depthMap)
+        && mayNeedGfmTextEscape(textNode.value, state.buffer, state.depthMap, bufferBaseLineContext.markdownIndent)) {
+        textNode.value = escapeGfmText(textNode.value, state.buffer, state.depthMap, bufferBaseLineContext.markdownIndent)
       }
 
       if (textNode.generatedMarkdown && textNode.value)
@@ -1028,7 +1396,7 @@ export function createMarkdownProcessor(options: EngineOptions = {}, resolvedPlu
       if (wrapWidth && canWrapHere(state.depthMap)) {
         const wrapped = wrapText(
           textNode.value,
-          currentColumn(state.buffer),
+          currentColumn(state.buffer, bufferBaseLineContext.column, bufferBaseLineContext.trailingHighSurrogate),
           wrapWidth,
           continuationPrefix(textNode, state.listIndentWidths, state.blockquotes.length === 0),
         )
@@ -1416,6 +1784,37 @@ export function createMarkdownProcessor(options: EngineOptions = {}, resolvedPlu
     updateListIndent(state, element, eventType)
   }
 
+  function processEventWithPlugins(event: NodeEvent): void {
+    const buffer = state.buffer
+    const ownSplice = Object.getOwnPropertyDescriptor(buffer, 'splice')
+    const originalSplice = buffer.splice
+    let restoring = false
+    const trackedSplice: typeof buffer.splice = function (...args) {
+      if (restoring)
+        return Reflect.apply(originalSplice, buffer, args) as string[]
+      const anchors = captureRewriteAnchors()
+      restoring = true
+      try {
+        const removed = Reflect.apply(originalSplice, buffer, args) as string[]
+        restoreRewriteAnchors(anchors)
+        return removed
+      }
+      finally {
+        restoring = false
+      }
+    }
+    Object.defineProperty(buffer, 'splice', { configurable: true, value: trackedSplice, writable: true })
+    try {
+      processPluginsForEvent(event, resolvedPlugins, state, processEvent)
+    }
+    finally {
+      if (ownSplice)
+        Object.defineProperty(buffer, 'splice', ownSplice)
+      else
+        Reflect.deleteProperty(buffer, 'splice')
+    }
+  }
+
   /**
    * Process HTML string and generate events
    */
@@ -1429,7 +1828,7 @@ export function createMarkdownProcessor(options: EngineOptions = {}, resolvedPlu
     }
 
     const handleEvent: (event: NodeEvent) => void = resolvedPlugins.length
-      ? event => processPluginsForEvent(event, resolvedPlugins, state, processEvent)
+      ? processEventWithPlugins
       : processEvent
     const leftover = parseHtmlStream(html, parseState, handleEvent)
     // Commit trailing text and close unclosed elements at end of input.
@@ -1450,27 +1849,29 @@ export function createMarkdownProcessor(options: EngineOptions = {}, resolvedPlu
   /**
    * Get new markdown content since the last call (for streaming)
    */
-  function getMarkdownChunk(): string {
-    const content = state.buffer.join('')
-    const currentContent = hasYieldedContent || (state.plainText && preserveLeadingWhitespace)
-      ? content
-      : content.trimStart()
+  function getMarkdownChunk(final = false): string {
+    const buffer = state.buffer
+    if (resolvedPlugins.length)
+      emittedPosition = bufferPositionAtOffset(buffer, emittedPluginOffset)
+    const trimLeading = !hasYieldedContent && !(state.plainText && preserveLeadingWhitespace)
+    if (trimLeading)
+      emittedPosition = trimBufferStart(buffer, emittedPosition)
+    const contentStart = trimLeading ? emittedPosition : fragmentStart(0)
+    const end = bufferEnd(buffer)
     const inPre = state.depthMap[TAG_PRE] !== 0
-    const trailingCode = currentContent.charCodeAt(currentContent.length - 1)
-    let trailingSpaceEnd = currentContent.length
-    while (trailingSpaceEnd > 0 && currentContent.charCodeAt(trailingSpaceEnd - 1) === 32)
-      trailingSpaceEnd--
-    let stableLength = trailingSpaceEnd
-    let retainMutableFragments = stableLength < currentContent.length
+    const trailingCode = bufferCodeBefore(buffer, end)
+    let stablePosition = retreatBufferPosition(buffer, end, contentStart, code => code === 32)
+    let retainMutableFragments = compareBufferPositions(stablePosition, end) < 0
     if (inPre) {
       if (state.lastTextNode?.containsWhitespace && isAsciiWhitespace(trailingCode)) {
-        stableLength = trimAsciiWhitespaceEnd(currentContent).length
-        retainMutableFragments = stableLength < currentContent.length
+        stablePosition = retreatBufferPosition(buffer, end, contentStart, isAsciiWhitespace)
+        retainMutableFragments = compareBufferPositions(stablePosition, end) < 0
       }
-      else if (stableLength < currentContent.length) {
-        const lineLeading = stableLength === 0 || currentContent.charCodeAt(stableLength - 1) === 10
+      else if (retainMutableFragments) {
+        const lineLeading = compareBufferPositions(stablePosition, contentStart) === 0
+          || bufferCodeBefore(buffer, stablePosition) === 10
         if (!lineLeading) {
-          stableLength = currentContent.length
+          stablePosition = end
           retainMutableFragments = false
         }
       }
@@ -1479,111 +1880,101 @@ export function createMarkdownProcessor(options: EngineOptions = {}, resolvedPlu
       // Block spacing and trailing spaces can still be trimmed by a later
       // element close or by finalization. Keep them buffered until following
       // content makes them stable.
-      while (stableLength > 0 && (currentContent[stableLength - 1] === ' ' || currentContent[stableLength - 1] === '\n'))
-        stableLength--
-      retainMutableFragments = stableLength < currentContent.length
+      stablePosition = retreatBufferPosition(buffer, stablePosition, contentStart, code => code === 32 || code === 10)
+      retainMutableFragments = compareBufferPositions(stablePosition, end) < 0
     }
-
-    const leadingTrimmed = content.length - currentContent.length
 
     // An open inline marker may still be dropped if its element closes empty in a later chunk;
     // hold the buffer at the earliest such marker so already-yielded output is never rewritten.
     const markerHeld = openMarkerCount > 0
     if (markerHeld) {
       const openFragment = openMarkers[0]! >> 3
-      const markerPos = Math.max(
-        lastYieldedLength,
-        trimBufferedWhitespacePosition(currentContent, fragmentPosition(state.buffer, openFragment) - leadingTrimmed),
-      )
-      if (markerPos < stableLength)
-        stableLength = markerPos
+      let markerPosition = trimBufferedWhitespacePosition(buffer, fragmentStart(openFragment), contentStart)
+      if (compareBufferPositions(markerPosition, emittedPosition) < 0)
+        markerPosition = emittedPosition
+      if (compareBufferPositions(markerPosition, stablePosition) < 0)
+        stablePosition = markerPosition
     }
     const codeSpanHeld = gfmLifecycle.openCodeSpans.length > 0
     if (codeSpanHeld) {
-      const spanPos = Math.max(
-        lastYieldedLength,
-        trimBufferedWhitespacePosition(currentContent, fragmentPosition(state.buffer, gfmLifecycle.openCodeSpans[0]!.fragment) - leadingTrimmed),
+      let spanPosition = trimBufferedWhitespacePosition(
+        buffer,
+        fragmentStart(gfmLifecycle.openCodeSpans[0]!.fragment),
+        contentStart,
       )
-      if (spanPos < stableLength)
-        stableLength = spanPos
+      if (compareBufferPositions(spanPosition, emittedPosition) < 0)
+        spanPosition = emittedPosition
+      if (compareBufferPositions(spanPosition, stablePosition) < 0)
+        stablePosition = spanPosition
     }
     const codeFenceHeld = state.codeFence !== undefined
     if (codeFenceHeld) {
-      const fencePos = Math.max(
-        lastYieldedLength,
-        trimBufferedWhitespacePosition(currentContent, fragmentPosition(state.buffer, state.codeFence!.fragment) - leadingTrimmed),
+      let fencePosition = trimBufferedWhitespacePosition(
+        buffer,
+        fragmentStart(state.codeFence!.fragment),
+        contentStart,
       )
-      if (fencePos < stableLength)
-        stableLength = fencePos
+      if (compareBufferPositions(fencePosition, emittedPosition) < 0)
+        fencePosition = emittedPosition
+      if (compareBufferPositions(fencePosition, stablePosition) < 0)
+        stablePosition = fencePosition
     }
     const blockquoteHeld = state.blockquotes.length > 0
     if (blockquoteHeld) {
-      const blockquotePos = Math.max(
-        lastYieldedLength,
-        trimBufferedWhitespacePosition(
-          currentContent,
-          fragmentPosition(state.buffer, state.blockquotes[0]!.fragment) - leadingTrimmed,
-        ),
+      let blockquotePosition = trimBufferedWhitespacePosition(
+        buffer,
+        fragmentStart(state.blockquotes[0]!.fragment),
+        contentStart,
       )
-      if (blockquotePos < stableLength)
-        stableLength = blockquotePos
+      if (compareBufferPositions(blockquotePosition, emittedPosition) < 0)
+        blockquotePosition = emittedPosition
+      if (compareBufferPositions(blockquotePosition, stablePosition) < 0)
+        stablePosition = blockquotePosition
     }
 
     // An open link can rewrite its opening bracket and all link text when it
     // closes as a GFM autolink. Hold that region until the close is final.
     const linkHeld = openLinkFragment >= 0
     if (linkHeld) {
-      const linkPos = Math.max(
-        lastYieldedLength,
-        trimBufferedWhitespacePosition(currentContent, fragmentPosition(state.buffer, openLinkFragment) - leadingTrimmed),
-      )
-      if (linkPos < stableLength)
-        stableLength = linkPos
+      let linkPosition = trimBufferedWhitespacePosition(buffer, fragmentStart(openLinkFragment), contentStart)
+      if (compareBufferPositions(linkPosition, emittedPosition) < 0)
+        linkPosition = emittedPosition
+      if (compareBufferPositions(linkPosition, stablePosition) < 0)
+        stablePosition = linkPosition
     }
 
     // A later mutable tail can move the stable boundary behind bytes already
     // returned to the caller. Keep the cursor monotonic so those bytes are not
     // emitted a second time once following content makes the tail stable.
-    if (stableLength < lastYieldedLength)
-      stableLength = lastYieldedLength
+    if (compareBufferPositions(stablePosition, emittedPosition) < 0)
+      stablePosition = emittedPosition
 
-    const newContent = currentContent.slice(lastYieldedLength, stableLength)
-    lastYieldedLength = stableLength
+    const codeBeforeStable = bufferCodeBefore(buffer, stablePosition)
+    const codeAfterStable = bufferCodeAfter(buffer, stablePosition)
+    if (codeBeforeStable >= 0xD800 && codeBeforeStable <= 0xDBFF
+      && ((!final && Number.isNaN(codeAfterStable)) || (codeAfterStable >= 0xDC00 && codeAfterStable <= 0xDFFF))) {
+      stablePosition = retreatBufferCodeUnits(buffer, stablePosition, emittedPosition, 1)
+      retainMutableFragments = true
+    }
+
+    const newContent = joinBufferRange(buffer, emittedPosition, stablePosition)
+    emittedPosition = stablePosition
+    if (resolvedPlugins.length)
+      emittedPluginOffset = bufferOffsetAtPosition(buffer, emittedPosition)
     if (newContent)
       hasYieldedContent = true
 
     // Keep only enough emitted context for spacing/newline decisions, plus any
     // trailing spaces that are still mutable. This prevents every stream chunk
-    // from joining and slicing the entire cumulative output. Plugin, wrapping,
-    // and open-link paths retain the full buffer because they can inspect or
-    // rewrite earlier content.
+    // from retaining the entire cumulative output. Plugin paths retain full
+    // fragment history because hooks can inspect or rewrite earlier output.
     if (!markerHeld && !codeSpanHeld && !codeFenceHeld && !blockquoteHeld && !linkHeld && (!retainMutableFragments || !inPre)) {
-      if (!resolvedPlugins.length && !options.wrapWidth && !state.depthMap[TAG_A]) {
-        if (retainMutableFragments && leadingTrimmed === 0) {
-          // Preserve the final fragment as a separate value: close handlers
-          // identify and trim it by reference equality with lastContentCache.
-          const lastFragment = state.buffer.at(-1)!
-          const fragmentStart = currentContent.length - lastFragment.length
-          const tailStart = Math.max(0, Math.min(stableLength - 2, fragmentStart))
-          const emittedTail = currentContent.slice(tailStart, fragmentStart)
-          state.buffer.length = 0
-          if (emittedTail)
-            state.buffer.push(emittedTail)
-          state.buffer.push(lastFragment)
-          lastYieldedLength = stableLength - tailStart
+      if (!resolvedPlugins.length && !state.depthMap[TAG_A]) {
+        if (hasYieldedContent) {
+          const compacted = compactBuffer(buffer, emittedPosition, retainMutableFragments, bufferBaseLineContext)
+          bufferBaseLineContext = compacted.retainedContext
+          emittedPosition = compacted.emitted
         }
-        else if (!retainMutableFragments) {
-          const tailStart = Math.max(0, stableLength - 2)
-          const emittedTail = currentContent.slice(tailStart, stableLength)
-          state.buffer.length = 0
-          if (emittedTail)
-            state.buffer.push(emittedTail)
-          lastYieldedLength = emittedTail.length
-        }
-      }
-      else if (!retainMutableFragments && state.buffer.length > 1) {
-        state.buffer.length = 0
-        state.buffer.push(currentContent)
       }
     }
     return newContent
@@ -1591,6 +1982,7 @@ export function createMarkdownProcessor(options: EngineOptions = {}, resolvedPlu
 
   return {
     processEvent,
+    processEventWithPlugins,
     processHtml,
     getMarkdown,
     getMarkdownChunk,

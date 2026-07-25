@@ -2,7 +2,6 @@ import type { ParseState } from './parse'
 import type { EngineOptions, NodeEvent, TagHandler, TransformPlugin } from './types'
 import { createMarkdownProcessor } from './markdown-processor'
 import { finalizeParse, parseHtmlStream } from './parse'
-import { processPluginsForEvent } from './plugin-processor'
 
 /**
  * Creates a markdown stream from an HTML stream
@@ -33,7 +32,7 @@ export async function* streamHtmlToMarkdown(
     plainText: processor.state.plainText,
   }
   const handleEvent: (event: NodeEvent) => void = resolvedPlugins.length
-    ? event => processPluginsForEvent(event, resolvedPlugins, processor.state, processor.processEvent)
+    ? processor.processEventWithPlugins
     : processor.processEvent
 
   let remainingHtml = ''
@@ -69,7 +68,7 @@ export async function* streamHtmlToMarkdown(
     finalizeParse(leftover, parseState, handleEvent)
 
     // Emit any final content
-    const finalChunk = processor.getMarkdownChunk()
+    const finalChunk = processor.getMarkdownChunk(true)
     if (finalChunk) {
       yield finalChunk
     }

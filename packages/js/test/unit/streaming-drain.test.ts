@@ -1,5 +1,6 @@
+import type { MdreamOptions, TransformPlugin } from '../../src/types'
 import { describe, expect, it } from 'vitest'
-import { htmlToMarkdown, streamHtmlToMarkdown } from '../../src/index'
+import { createPlugin, htmlToMarkdown, streamHtmlToMarkdown } from '../../src/index'
 
 function chunkedStream(html: string, chunkSize: number): ReadableStream<string> {
   return new ReadableStream({
@@ -11,9 +12,37 @@ function chunkedStream(html: string, chunkSize: number): ReadableStream<string> 
   })
 }
 
-async function streamConvert(html: string, chunkSize: number): Promise<string> {
+async function streamChunks(chunks: string[], options: Partial<MdreamOptions> = {}): Promise<string> {
+  const stream = new ReadableStream<string>({
+    start(controller) {
+      for (const chunk of chunks)
+        controller.enqueue(chunk)
+      controller.close()
+    },
+  })
   let markdown = ''
-  for await (const chunk of streamHtmlToMarkdown(chunkedStream(html, chunkSize)))
+  for await (const chunk of streamHtmlToMarkdown(stream, options))
+    markdown += chunk
+  return markdown
+}
+
+async function streamedOutputChunks(chunks: string[], options: Partial<MdreamOptions> = {}): Promise<string[]> {
+  const stream = new ReadableStream<string>({
+    start(controller) {
+      for (const chunk of chunks)
+        controller.enqueue(chunk)
+      controller.close()
+    },
+  })
+  const output: string[] = []
+  for await (const chunk of streamHtmlToMarkdown(stream, options))
+    output.push(chunk)
+  return output
+}
+
+async function streamConvert(html: string, chunkSize: number, options: Partial<MdreamOptions> = {}): Promise<string> {
+  let markdown = ''
+  for await (const chunk of streamHtmlToMarkdown(chunkedStream(html, chunkSize), options))
     markdown += chunk
   return markdown
 }
@@ -72,4 +101,263 @@ describe('streaming drain parity', () => {
     for (const chunkSize of [1, 3, 7, 16, 40])
       expect(await streamConvert(BLOCK_NEWLINE_HTML, chunkSize), `chunkSize=${chunkSize}`).toBe(expected)
   })
+
+  it('preserves cumulative plugin buffer fragments and array identity', async () => {
+    let buffer: string[] | undefined
+    const plugin = createPlugin({
+      beforeNodeProcess(_event, state) {
+        buffer ||= state.buffer
+        expect(state.buffer).toBe(buffer)
+      },
+    })
+    const html = '<strong>Alpha</strong><em>Beta</em><span>Gamma</span>'
+
+    expect(await streamChunks([
+      '<strong>Alpha</strong>',
+      '<em>Beta</em>',
+      '<span>Gamma</span>',
+    ], { hooks: [plugin] })).toBe(htmlToMarkdown(html, { hooks: [createPlugin({})] }))
+    expect(buffer).toContain('Alpha')
+    expect(buffer).toContain('Beta')
+    expect(buffer).toContain('Gamma')
+    expect(buffer!.length).toBeGreaterThan(3)
+  })
+
+  it('drains plugin appends and mutations of the un-emitted tail', async () => {
+    function tailPlugin(): TransformPlugin {
+      let div = 0
+      return createPlugin({
+        onNodeEnter(node, state) {
+          if (node.name !== 'div' || ++div !== 2)
+            return
+          const tail = state.buffer.length - 1
+          state.buffer[tail] = `${state.buffer[tail]!.replace(/\n+$/, '')} changed\n\n`
+          state.buffer.push('appended')
+        },
+      })
+    }
+    const html = '<div>Alpha</div><div>Beta</div>'
+    const expected = htmlToMarkdown(html, { hooks: [tailPlugin()] })
+    const actual = await streamChunks(['<div>Alpha</div>', '<div>Beta</div>'], { hooks: [tailPlugin()] })
+
+    expect(actual).toBe(expected)
+    expect(actual).toContain('changed')
+    expect(actual).toContain('appended')
+  })
+
+  it('rebases the emitted cursor after a plugin coalesces historical fragments', async () => {
+    function coalescingPlugin(): TransformPlugin {
+      let div = 0
+      return createPlugin({
+        onNodeEnter(node, state) {
+          if (node.name !== 'div' || ++div !== 2)
+            return
+          state.buffer.splice(0, state.buffer.length, state.buffer.join(''))
+        },
+      })
+    }
+    const html = '<div>Alpha</div><div>Beta</div>'
+
+    expect(await streamChunks(['<div>Alpha</div>', '<div>Beta</div>'], { hooks: [coalescingPlugin()] }))
+      .toBe(htmlToMarkdown(html, { hooks: [coalescingPlugin()] }))
+  })
+
+  it('restores active rewrite anchors after a plugin coalesces fragments', async () => {
+    function coalescingPlugin(): TransformPlugin {
+      return createPlugin({
+        onNodeEnter(node, state) {
+          if (node.name === 'span')
+            state.buffer.splice(0, state.buffer.length, state.buffer.join(''))
+        },
+      })
+    }
+    const html = '<code>alpha<span>beta</span>gamma</code>'
+    const expected = htmlToMarkdown(html, { hooks: [coalescingPlugin()] })
+
+    expect(await streamChunks(['<code>alpha', '<span>beta</span>', 'gamma</code>'], { hooks: [coalescingPlugin()] }))
+      .toBe(expected)
+  })
+
+  it('preserves active anchors when plugins change earlier fragment lengths', async () => {
+    function rewritingPlugin(): TransformPlugin {
+      return createPlugin({
+        onNodeEnter(node, state) {
+          if (node.name !== 'span')
+            return
+          const text = state.buffer.indexOf('X')
+          state.buffer[text] = 'QX'
+        },
+      })
+    }
+    const html = '<a href="/x"><code>X<span>a</span></code></a>'
+    const expected = htmlToMarkdown(html, { hooks: [rewritingPlugin()] })
+
+    expect(expected).toContain('QX')
+    expect(await streamChunks(['<a href="/x"><code>X', '<span>a</span>', '</code></a>'], { hooks: [rewritingPlugin()] }))
+      .toBe(expected)
+  })
+
+  it('tracks active anchors through length edits followed by coalescing', async () => {
+    function rewritingPlugin(): TransformPlugin {
+      return createPlugin({
+        onNodeEnter(node, state) {
+          if (node.name !== 'span')
+            return
+          const text = state.buffer.indexOf('X')
+          state.buffer[text] = 'QX'
+          state.buffer.splice(0, state.buffer.length, state.buffer.join(''))
+        },
+      })
+    }
+    const html = '<a href="/x">X<code><span>a</span></code></a>'
+    const expected = htmlToMarkdown(html, { hooks: [rewritingPlugin()] })
+
+    expect(expected).toContain('QX')
+    expect(await streamChunks(['<a href="/x">X<code>', '<span>a</span>', '</code></a>'], { hooks: [rewritingPlugin()] }))
+      .toBe(expected)
+  })
+
+  it('does not join the cumulative plugin buffer while draining', async () => {
+    let protectedBuffer: string[] | undefined
+    const plugin = createPlugin({
+      beforeNodeProcess(_event, state) {
+        if (protectedBuffer)
+          return
+        protectedBuffer = state.buffer
+        Object.defineProperty(state.buffer, 'join', {
+          value: () => {
+            throw new Error('cumulative buffer joined')
+          },
+        })
+      },
+    })
+    const chunks = Array.from({ length: 128 }, (_, index) => `<span>${index}</span>`)
+    const html = chunks.join('')
+
+    expect(await streamChunks(chunks, { hooks: [plugin] })).toBe(htmlToMarkdown(html))
+    expect(protectedBuffer!.length).toBe(chunks.length)
+  })
+
+  it.each([
+    '<p>before <strong></strong><em>after</em></p>',
+    '<p>use <code>a`b``c</code> after</p>',
+    '<pre><code>before\n```\nafter</code></pre>',
+    '<p>UTF-16 🎉 boundary</p>',
+  ])('keeps held marker and code boundaries at every chunk width: %s', async (html) => {
+    const expected = htmlToMarkdown(html)
+    const noOpPlugin = createPlugin({})
+
+    for (let chunkSize = 1; chunkSize <= html.length; chunkSize++) {
+      expect(await streamConvert(html, chunkSize, { hooks: [noOpPlugin] }), `chunkSize=${chunkSize}`)
+        .toBe(expected)
+    }
+  })
+
+  it.each([
+    ['code span', '<code>', '</code>', 'a````b'],
+    ['backtick fence', '<pre><code>', '</code></pre>', 'a\n````\nb'],
+    ['tilde fence', '<pre><code class="language-a`b">', '</code></pre>', 'a\n~~~~\nb'],
+  ])('sizes %s delimiters split across fragment boundaries', async (_name, open, close, content) => {
+    const html = `${open}${content}${close}`
+    const chunks = [open, ...content, close]
+
+    expect(await streamChunks(chunks)).toBe(htmlToMarkdown(html))
+  })
+
+  it('keeps the longest line-leading fence marker run', async () => {
+    const html = '<pre><code>````\n`\nafter</code></pre>'
+    const markdown = await streamChunks(['<pre><code>', '``', '``\n', '`\n', 'after', '</code></pre>'])
+
+    expect(markdown).toBe(htmlToMarkdown(html))
+    expect(markdown.startsWith('`````\n')).toBe(true)
+    expect(markdown.endsWith('\n`````')).toBe(true)
+  })
+
+  it('never yields between UTF-16 surrogate halves', async () => {
+    let span = 0
+    const plugin = createPlugin({
+      onNodeEnter(node, state) {
+        if (node.name !== 'span')
+          return
+        state.buffer.push(++span === 1 ? '\uD83C' : '\uDF89')
+      },
+    })
+    const output = await streamedOutputChunks(['<span></span>', '<span></span>'], { hooks: [plugin] })
+
+    expect(output.join('')).toBe('🎉')
+    for (const chunk of output) {
+      const first = chunk.charCodeAt(0)
+      const last = chunk.charCodeAt(chunk.length - 1)
+      expect(first >= 0xDC00 && first <= 0xDFFF).toBe(false)
+      expect(last >= 0xD800 && last <= 0xDBFF).toBe(false)
+    }
+  })
+
+  it('retains a surrogate half across plugin-free compaction', async () => {
+    const options: Partial<MdreamOptions> = {
+      plugins: {
+        tagOverrides: {
+          'x-high': { enter: 'A\uD83C' },
+          'x-low': { enter: '\uDF89' },
+        },
+      },
+    }
+    const output = await streamedOutputChunks(['<x-high></x-high>', '<x-low></x-low>'], options)
+
+    expect(output.join('')).toBe('A🎉')
+    expect(output).toEqual(['A', '🎉'])
+  })
+
+  it('compacts wrapped output without losing line context', async () => {
+    const html = '<p>alpha beta gamma delta epsilon zeta eta theta iota kappa</p>'
+    const expected = htmlToMarkdown(html, { wrapWidth: 12 })
+
+    for (let chunkSize = 1; chunkSize <= html.length; chunkSize++)
+      expect(await streamConvert(html, chunkSize, { wrapWidth: 12 }), `chunkSize=${chunkSize}`).toBe(expected)
+  })
+
+  it('counts surrogate pairs split across fragments as one wrap column', async () => {
+    const options: Partial<MdreamOptions> = {
+      wrapWidth: 4,
+      plugins: {
+        tagOverrides: {
+          'x-high': { enter: '\uD83C' },
+          'x-low': { enter: '\uDF89' },
+        },
+      },
+    }
+    const html = '<x-high></x-high><x-low></x-low><span>a </span><span>a</span>'
+
+    expect(await streamChunks(['<x-high></x-high>', '<x-low></x-low>', '<span>a </span>', '<span>a</span>'], options))
+      .toBe(htmlToMarkdown(html, options))
+  })
+
+  it('carries a high surrogate through compacted wrap context', async () => {
+    const options: Partial<MdreamOptions> = {
+      wrapWidth: 11,
+      plugins: {
+        tagOverrides: {
+          'x-high': { enter: '\uD83C' },
+          'x-tail': { enter: '\uDF89abcdef ' },
+        },
+      },
+    }
+    const html = '<x-high></x-high><x-tail></x-tail><span>a b</span>'
+
+    expect(await streamChunks(['<x-high></x-high>', '<x-tail></x-tail>', '<span>a b</span>'], options))
+      .toBe(htmlToMarkdown(html, options))
+  })
+
+  it.runIf(process.env.MDREAM_STRESS_TESTS === '1').each([4, 8, 16])('keeps held %d MiB nodes frame-linear', async (sizeMiB) => {
+    const content = 'a'.repeat(sizeMiB * 1024 * 1024)
+    const fixtures = [
+      `<code>${content}</code>`,
+      `<pre><code>${content}</code></pre>`,
+      `<a href="/target">${content}</a>`,
+      `<blockquote>${content}</blockquote>`,
+    ]
+
+    for (const html of fixtures)
+      expect(await streamConvert(html, 8 * 1024)).toBe(htmlToMarkdown(html))
+  }, 15 * 60_000)
 })
