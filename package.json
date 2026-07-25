@@ -47,6 +47,6 @@
     "typescript": "catalog:",
     "unified": "catalog:bench",
     "vitest": "catalog:",
-    "yaml": "2.9.0"
+    "yaml": "catalog:"
   }
 }

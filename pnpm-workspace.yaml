@@ -81,6 +81,7 @@ catalog:
   vue-router: ^5.2.0
   vue-tsc: ^3.3.7
   wrangler: ^4.112.0
+  yaml: ^2.9.0
 
 catalogs:
   bench:
