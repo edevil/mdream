@@ -605,3 +605,60 @@ pub enum OutputFormat {
   /// Plain text output with Markdown/HTML syntax omitted.
   Text,
 }
+
+/// Retained-buffer ceiling for [`crate::BoundedMarkdownStreamProcessor`].
+///
+/// This limits retained input carry, Markdown output, parser text scratch, and
+/// strings needed by open streaming constructs. It is not an aggregate-memory
+/// limit: attributes, tables, plugins, node pools, returned output, and
+/// transient conversion allocations are outside this M1 contract.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct StreamingLimits {
+  pub max_buffered_bytes: usize,
+}
+
+impl StreamingLimits {
+  pub const fn new(max_buffered_bytes: usize) -> Self {
+    Self { max_buffered_bytes }
+  }
+}
+
+impl Default for StreamingLimits {
+  fn default() -> Self {
+    Self {
+      max_buffered_bytes: usize::MAX,
+    }
+  }
+}
+
+/// Whole-document options that the bounded streaming API cannot yet support.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UnsupportedStreamingOption {
+  CleanFragments,
+  Frontmatter,
+  Extraction,
+}
+
+/// Stable failure classes returned by bounded streaming conversion.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StreamingError {
+  UnsupportedOption(UnsupportedStreamingOption),
+  BufferLimitExceeded,
+  AllocationFailed,
+  CapacityOverflow,
+}
+
+impl std::fmt::Display for StreamingError {
+  fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    match self {
+      Self::UnsupportedOption(option) => {
+        write!(f, "unsupported bounded streaming option: {option:?}")
+      }
+      Self::BufferLimitExceeded => f.write_str("retained streaming buffer limit exceeded"),
+      Self::AllocationFailed => f.write_str("retained streaming buffer allocation failed"),
+      Self::CapacityOverflow => f.write_str("retained streaming buffer capacity overflow"),
+    }
+  }
+}
+
+impl std::error::Error for StreamingError {}

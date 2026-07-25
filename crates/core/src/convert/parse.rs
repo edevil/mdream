@@ -351,8 +351,8 @@ impl ConvertState {
       if tw.hidden {
         excludes_text_nodes = true;
       } else if !excludes_text_nodes {
-        tailwind_prefix = tw.prefix.clone();
-        tailwind_suffix = tw.suffix.clone();
+        tailwind_prefix.clone_from(&tw.prefix);
+        tailwind_suffix.clone_from(&tw.suffix);
       }
     }
 
@@ -953,9 +953,25 @@ impl ConvertState {
       } else {
         0
       };
+      if !self.reserve_list_indent_width() {
+        return OpeningTagResult {
+          complete: true,
+          new_position,
+          self_closing,
+          skip: false,
+        };
+      }
       self
         .list_indent_widths
         .push(u8::try_from(width).unwrap_or(u8::MAX));
+      if !self.reserve_list_indent(width) {
+        return OpeningTagResult {
+          complete: true,
+          new_position,
+          self_closing,
+          skip: false,
+        };
+      }
       for _ in 0..width {
         self.list_indent.push(' ');
       }
@@ -1089,6 +1105,9 @@ impl ConvertState {
           {
             let new_len = self.list_indent.len().saturating_sub(w as usize);
             self.list_indent.truncate(new_len);
+            if new_len == 0 && self.streaming_limit.is_some() {
+              self.list_indent = String::new();
+            }
           }
         }
         self.depth -= 1;
@@ -1119,6 +1138,9 @@ impl ConvertState {
       {
         let new_len = self.list_indent.len().saturating_sub(w as usize);
         self.list_indent.truncate(new_len);
+        if new_len == 0 && self.streaming_limit.is_some() {
+          self.list_indent = String::new();
+        }
       }
     }
 

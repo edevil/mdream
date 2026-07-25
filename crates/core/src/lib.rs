@@ -16,7 +16,8 @@ use convert::ConvertState;
 // the `types` module.
 pub use types::{
   CleanConfig, ExtractionConfig, FilterConfig, FrontmatterConfig, HTMLToMarkdownOptions,
-  IsolateMainConfig, MdreamResult, OutputFormat, PluginConfig, TagOverrideConfig, TailwindConfig,
+  IsolateMainConfig, MdreamResult, OutputFormat, PluginConfig, StreamingError, StreamingLimits,
+  TagOverrideConfig, TailwindConfig, UnsupportedStreamingOption,
 };
 
 // Re-export `get_tag_id` so callers can resolve tag names to IDs (for
@@ -128,6 +129,140 @@ impl MarkdownStreamProcessor {
     };
     self.state.finalize(&leftover);
     self.state.get_markdown_chunk()
+  }
+}
+
+/// Streaming converter with an enforceable retained dynamic-buffer ceiling.
+///
+/// Returned chunks are caller-owned and are not charged to the ceiling. If a
+/// later call fails, chunks returned by earlier calls cannot be rolled back.
+/// Attributes, tables, plugins, node pools, and transient conversion
+/// allocations are not included in this retained-buffer foundation.
+pub struct BoundedMarkdownStreamProcessor {
+  state: ConvertState,
+  buffer: String,
+  terminal_error: Option<StreamingError>,
+}
+
+impl BoundedMarkdownStreamProcessor {
+  pub fn new(
+    options: HTMLToMarkdownOptions,
+    limits: StreamingLimits,
+  ) -> Result<Self, StreamingError> {
+    Self::new_with_format(options, OutputFormat::Markdown, limits)
+  }
+
+  /// Create a bounded streaming converter for the requested output format.
+  pub fn new_with_format(
+    options: HTMLToMarkdownOptions,
+    format: OutputFormat,
+    limits: StreamingLimits,
+  ) -> Result<Self, StreamingError> {
+    if options.clean.as_ref().is_some_and(|clean| clean.fragments) {
+      return Err(StreamingError::UnsupportedOption(
+        UnsupportedStreamingOption::CleanFragments,
+      ));
+    }
+    if let Some(plugins) = &options.plugins {
+      if plugins.frontmatter.is_some() {
+        return Err(StreamingError::UnsupportedOption(
+          UnsupportedStreamingOption::Frontmatter,
+        ));
+      }
+      if plugins.extraction.is_some() {
+        return Err(StreamingError::UnsupportedOption(
+          UnsupportedStreamingOption::Extraction,
+        ));
+      }
+    }
+
+    Ok(Self {
+      state: ConvertState::new_bounded(options, format, limits.max_buffered_bytes),
+      buffer: String::new(),
+      terminal_error: None,
+    })
+  }
+
+  fn fail(&mut self, error: StreamingError) -> StreamingError {
+    let error = *self.terminal_error.get_or_insert(error);
+    self.buffer = String::new();
+    self.state.release_retained_buffers();
+    error
+  }
+
+  fn check_error(&mut self) -> Result<(), StreamingError> {
+    if let Some(error) = self.terminal_error.or_else(|| self.state.streaming_error()) {
+      return Err(self.fail(error));
+    }
+    Ok(())
+  }
+
+  fn retain_carry(&mut self, carry: &str) -> Result<(), StreamingError> {
+    if carry.is_empty() {
+      self.buffer = String::new();
+      return Ok(());
+    }
+    if let Err(error) = self.state.reserve_external(&mut self.buffer, carry.len()) {
+      return Err(self.fail(error));
+    }
+    self.buffer.push_str(carry);
+    Ok(())
+  }
+
+  pub fn process_chunk(&mut self, chunk: &str) -> Result<String, StreamingError> {
+    self.check_error()?;
+
+    let carry = if self.buffer.is_empty() {
+      self.state.process_html(chunk)
+    } else {
+      let required = self
+        .buffer
+        .len()
+        .checked_add(chunk.len())
+        .ok_or_else(|| self.fail(StreamingError::CapacityOverflow))?;
+      if let Err(error) = self.state.reserve_external(&mut self.buffer, required) {
+        return Err(self.fail(error));
+      }
+      self.buffer.push_str(chunk);
+      let full = std::mem::take(&mut self.buffer);
+      self.state.process_html(&full)
+    };
+
+    self.check_error()?;
+    self.retain_carry(&carry)?;
+    let output = self.state.get_markdown_chunk();
+    self.check_error()?;
+    self.state.release_closed_high_water();
+    self.check_error()?;
+    Ok(output)
+  }
+
+  pub fn finish(&mut self) -> Result<String, StreamingError> {
+    self.check_error()?;
+    let leftover = if self.buffer.is_empty() {
+      String::new()
+    } else {
+      let chunk = std::mem::take(&mut self.buffer);
+      self.state.process_html(&chunk)
+    };
+    self.check_error()?;
+    self.state.finalize(&leftover);
+    self.check_error()?;
+    let output = self.state.get_markdown_chunk();
+    self.check_error()?;
+    self.state.release_closed_high_water();
+    self.check_error()?;
+    Ok(output)
+  }
+
+  /// Bytes currently retained by buffers covered by this API.
+  pub fn buffered_bytes(&self) -> usize {
+    self.buffer.len() + self.state.retained_buffered_bytes()
+  }
+
+  /// Allocated capacity currently charged to the retained-buffer ceiling.
+  pub fn buffered_capacity(&self) -> usize {
+    self.buffer.capacity() + self.state.retained_buffer_capacity()
   }
 }
 

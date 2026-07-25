@@ -7,10 +7,12 @@ use crate::selector::{matches_selector, parse_css_selector};
 use crate::tags::get_tag_handler;
 use crate::tailwind::process_tailwind_classes;
 use crate::types::{
-  ElementNode, ExtractedElement, HTMLToMarkdownOptions, OutputFormat, ParsedSelector, TailwindData,
+  ElementNode, ExtractedElement, HTMLToMarkdownOptions, OutputFormat, ParsedSelector,
+  StreamingError, TailwindData,
 };
 use crate::url::{is_autolink_uri, resolve_url, slugify_heading};
 use std::borrow::Cow;
+use std::collections::TryReserveError;
 
 mod output;
 mod parse;
@@ -54,6 +56,133 @@ struct CodeFenceState {
 struct BlockquoteFrame {
   content_start: usize,
   list_indent: String,
+}
+
+fn reserve_accounted_with<F>(
+  value: &mut String,
+  required_len: usize,
+  retained_capacity: usize,
+  limit: usize,
+  reserve: F,
+) -> Result<(), StreamingError>
+where
+  F: FnOnce(&mut String, usize) -> Result<(), TryReserveError>,
+{
+  if required_len <= value.capacity() {
+    return Ok(());
+  }
+  if required_len > isize::MAX as usize {
+    return Err(StreamingError::CapacityOverflow);
+  }
+  let old_capacity = value.capacity();
+  let requested_growth = required_len
+    .checked_sub(old_capacity)
+    .ok_or(StreamingError::CapacityOverflow)?;
+  let requested_total = retained_capacity
+    .checked_add(requested_growth)
+    .ok_or(StreamingError::CapacityOverflow)?;
+  if requested_total > limit {
+    return Err(StreamingError::BufferLimitExceeded);
+  }
+
+  let additional = required_len
+    .checked_sub(value.len())
+    .ok_or(StreamingError::CapacityOverflow)?;
+  reserve(value, additional).map_err(|_| StreamingError::AllocationFailed)?;
+
+  let Some(actual_total) = retained_capacity
+    .checked_sub(old_capacity)
+    .and_then(|total| total.checked_add(value.capacity()))
+  else {
+    *value = String::new();
+    return Err(StreamingError::CapacityOverflow);
+  };
+  if actual_total > limit {
+    *value = String::new();
+    return Err(StreamingError::BufferLimitExceeded);
+  }
+  Ok(())
+}
+
+pub(crate) fn reserve_accounted(
+  value: &mut String,
+  required_len: usize,
+  retained_capacity: usize,
+  limit: usize,
+) -> Result<(), StreamingError> {
+  reserve_accounted_with(
+    value,
+    required_len,
+    retained_capacity,
+    limit,
+    String::try_reserve_exact,
+  )
+}
+
+fn vector_capacity_bytes<T>(value: &Vec<T>) -> usize {
+  value.capacity().saturating_mul(std::mem::size_of::<T>())
+}
+
+fn reserve_vec_accounted_with<T, F>(
+  value: &mut Vec<T>,
+  required_len: usize,
+  retained_capacity: usize,
+  limit: usize,
+  reserve: F,
+) -> Result<(), StreamingError>
+where
+  F: FnOnce(&mut Vec<T>, usize) -> Result<(), TryReserveError>,
+{
+  if required_len <= value.capacity() {
+    return Ok(());
+  }
+  let item_size = std::mem::size_of::<T>();
+  if item_size != 0 && required_len > isize::MAX as usize / item_size {
+    return Err(StreamingError::CapacityOverflow);
+  }
+  let old_capacity = vector_capacity_bytes(value);
+  let requested_capacity = required_len
+    .checked_mul(item_size)
+    .ok_or(StreamingError::CapacityOverflow)?;
+  let requested_growth = requested_capacity
+    .checked_sub(old_capacity)
+    .ok_or(StreamingError::CapacityOverflow)?;
+  if retained_capacity
+    .checked_add(requested_growth)
+    .ok_or(StreamingError::CapacityOverflow)?
+    > limit
+  {
+    return Err(StreamingError::BufferLimitExceeded);
+  }
+
+  reserve(value, required_len - value.len()).map_err(|_| StreamingError::AllocationFailed)?;
+  let Some(actual_total) = retained_capacity
+    .checked_sub(old_capacity)
+    .and_then(|retained| retained.checked_add(vector_capacity_bytes(value)))
+  else {
+    *value = Vec::new();
+    return Err(StreamingError::CapacityOverflow);
+  };
+  if actual_total > limit {
+    *value = Vec::new();
+    return Err(StreamingError::BufferLimitExceeded);
+  }
+  Ok(())
+}
+
+fn reserve_vec_accounted<T>(
+  value: &mut Vec<T>,
+  required_len: usize,
+  retained_capacity: usize,
+  limit: usize,
+) -> Result<(), StreamingError> {
+  reserve_vec_accounted_with(
+    value,
+    required_len,
+    retained_capacity,
+    limit,
+    Vec::try_reserve_exact,
+  )
 }
 
 static HEADING_PREFIXES: [&str; 6] = ["# ", "## ", "### ", "#### ", "##### ", "###### "];
@@ -396,6 +525,8 @@ pub struct ConvertState {
   pre_fence_pending: bool,
   pre_fence_lang: String,
   pre_own_fence: bool,
+  streaming_limit: Option<usize>,
+  streaming_error: Option<StreamingError>,
   #[cfg(test)]
   gfm_escape_slow_path_calls: usize,
 }
@@ -408,6 +539,23 @@ impl ConvertState {
   }
 
   pub fn new(options: HTMLToMarkdownOptions, capacity: usize, format: OutputFormat) -> Self {
+    Self::new_inner(options, capacity, format, None)
+  }
+
+  pub(crate) fn new_bounded(
+    options: HTMLToMarkdownOptions,
+    format: OutputFormat,
+    max_buffered_bytes: usize,
+  ) -> Self {
+    Self::new_inner(options, 0, format, Some(max_buffered_bytes))
+  }
+
+  fn new_inner(
+    options: HTMLToMarkdownOptions,
+    capacity: usize,
+    format: OutputFormat,
+    streaming_limit: Option<usize>,
+  ) -> Self {
     // Read wrap width before `options` is moved into the struct below.
     let options_wrap_width = options.wrap_width;
     let plain_text = format == OutputFormat::Text;
@@ -461,7 +609,11 @@ impl ConvertState {
       filter_process_children: true,
 
       options,
-      buffer: String::with_capacity(capacity.max(1024)),
+      buffer: if streaming_limit.is_some() {
+        String::new()
+      } else {
+        String::with_capacity(capacity.max(1024))
+      },
       last_content_cache_len: 0,
       table_rendered_table: false,
       table_current_row_cells: 0,
@@ -488,18 +640,28 @@ impl ConvertState {
       open_markers: Vec::new(),
       code_spans: Vec::new(),
       code_fence: None,
-      blockquotes: Vec::with_capacity(4),
+      blockquotes: if streaming_limit.is_some() {
+        Vec::new()
+      } else {
+        Vec::with_capacity(4)
+      },
       heading_slugs: Vec::new(),
       fragment_links: Vec::new(),
       in_heading: false,
       heading_buffer_start: 0,
 
       list_indent: String::new(),
-      list_indent_widths: Vec::with_capacity(8),
+      list_indent_widths: if streaming_limit.is_some() {
+        Vec::new()
+      } else {
+        Vec::with_capacity(8)
+      },
 
       pre_fence_pending: false,
       pre_fence_lang: String::new(),
       pre_own_fence: false,
+      streaming_limit,
+      streaming_error: None,
       #[cfg(test)]
       gfm_escape_slow_path_calls: 0,
     };
@@ -566,10 +728,400 @@ impl ConvertState {
     s
   }
 
+  pub(crate) fn streaming_error(&self) -> Option<StreamingError> {
+    self.streaming_error
+  }
+
+  pub(crate) fn retained_buffered_bytes(&self) -> usize {
+    self.buffer.len()
+      + self.parse_text_buffer.len()
+      + self.script_text_buffer.len()
+      + self.list_indent.len()
+      + self.pre_fence_lang.len()
+      + self
+        .code_fence
+        .as_ref()
+        .map_or(0, |fence| fence.indent.len() + fence.language.len())
+      + self
+        .blockquotes
+        .iter()
+        .map(|frame| frame.list_indent.len())
+        .sum::<usize>()
+      + self.open_markers.len() * std::mem::size_of::<(u8, usize, usize)>()
+      + self.code_spans.len() * std::mem::size_of::<CodeSpanState>()
+      + self.blockquotes.len() * std::mem::size_of::<BlockquoteFrame>()
+      + self.list_indent_widths.len() * std::mem::size_of::<u8>()
+  }
+
+  pub(crate) fn retained_buffer_capacity(&self) -> usize {
+    self.buffer.capacity()
+      + self.parse_text_buffer.capacity()
+      + self.script_text_buffer.capacity()
+      + self.list_indent.capacity()
+      + self.pre_fence_lang.capacity()
+      + self.code_fence.as_ref().map_or(0, |fence| {
+        fence.indent.capacity() + fence.language.capacity()
+      })
+      + self
+        .blockquotes
+        .iter()
+        .map(|frame| frame.list_indent.capacity())
+        .sum::<usize>()
+      + vector_capacity_bytes(&self.open_markers)
+      + vector_capacity_bytes(&self.code_spans)
+      + vector_capacity_bytes(&self.blockquotes)
+      + vector_capacity_bytes(&self.list_indent_widths)
+  }
+
+  fn fail_streaming(&mut self, error: StreamingError) {
+    if self.streaming_error.is_none() {
+      self.streaming_error = Some(error);
+    }
+  }
+
+  pub(crate) fn release_retained_buffers(&mut self) {
+    self.buffer = String::new();
+    self.parse_text_buffer = String::new();
+    self.script_text_buffer = String::new();
+    self.list_indent = String::new();
+    self.pre_fence_lang = String::new();
+    self.code_fence = None;
+    self.open_markers = Vec::new();
+    self.code_spans = Vec::new();
+    self.blockquotes = Vec::new();
+    self.list_indent_widths = Vec::new();
+  }
+
+  fn reserve_retained(
+    value: &mut String,
+    required_len: usize,
+    retained_capacity: usize,
+    limit: usize,
+  ) -> Result<(), StreamingError> {
+    reserve_accounted(value, required_len, retained_capacity, limit)
+  }
+
+  pub(crate) fn reserve_output_to(&mut self, required_len: usize) -> bool {
+    let Some(limit) = self.streaming_limit else {
+      return true;
+    };
+    if self.streaming_error.is_some() {
+      return false;
+    }
+    let retained = self.retained_buffer_capacity();
+    if let Err(error) = Self::reserve_retained(&mut self.buffer, required_len, retained, limit) {
+      self.fail_streaming(error);
+      return false;
+    }
+    true
+  }
+
+  pub(crate) fn reserve_external(
+    &self,
+    value: &mut String,
+    required_len: usize,
+  ) -> Result<(), StreamingError> {
+    let Some(limit) = self.streaming_limit else {
+      return Ok(());
+    };
+    let retained = self
+      .retained_buffer_capacity()
+      .checked_add(value.capacity())
+      .ok_or(StreamingError::CapacityOverflow)?;
+    reserve_accounted(value, required_len, retained, limit)
+  }
+
+  pub(crate) fn reserve_output(&mut self, additional: usize) -> bool {
+    let Some(required_len) = self.buffer.len().checked_add(additional) else {
+      self.fail_streaming(StreamingError::CapacityOverflow);
+      return false;
+    };
+    self.reserve_output_to(required_len)
+  }
+
+  pub(crate) fn push_output_str(&mut self, value: &str) -> bool {
+    if !self.reserve_output(value.len()) {
+      return false;
+    }
+    self.buffer.push_str(value);
+    true
+  }
+
+  pub(crate) fn push_output_char(&mut self, value: char) -> bool {
+    if !self.reserve_output(value.len_utf8()) {
+      return false;
+    }
+    self.buffer.push(value);
+    true
+  }
+
+  pub(crate) fn reserve_list_indent(&mut self, additional: usize) -> bool {
+    let Some(limit) = self.streaming_limit else {
+      return true;
+    };
+    let Some(required_len) = self.list_indent.len().checked_add(additional) else {
+      self.fail_streaming(StreamingError::CapacityOverflow);
+      return false;
+    };
+    let retained = self.retained_buffer_capacity();
+    if let Err(error) = reserve_accounted(&mut self.list_indent, required_len, retained, limit) {
+      self.fail_streaming(error);
+      return false;
+    }
+    true
+  }
+
+  pub(crate) fn reserve_open_marker(&mut self) -> bool {
+    let Some(limit) = self.streaming_limit else {
+      return true;
+    };
+    let retained = self.retained_buffer_capacity();
+    let Some(required) = self.open_markers.len().checked_add(1) else {
+      self.fail_streaming(StreamingError::CapacityOverflow);
+      return false;
+    };
+    if let Err(error) = reserve_vec_accounted(&mut self.open_markers, required, retained, limit) {
+      self.fail_streaming(error);
+      return false;
+    }
+    true
+  }
+
+  pub(crate) fn reserve_code_span(&mut self) -> bool {
+    let Some(limit) = self.streaming_limit else {
+      return true;
+    };
+    let retained = self.retained_buffer_capacity();
+    let Some(required) = self.code_spans.len().checked_add(1) else {
+      self.fail_streaming(StreamingError::CapacityOverflow);
+      return false;
+    };
+    if let Err(error) = reserve_vec_accounted(&mut self.code_spans, required, retained, limit) {
+      self.fail_streaming(error);
+      return false;
+    }
+    true
+  }
+
+  pub(crate) fn reserve_blockquote(&mut self) -> bool {
+    let Some(limit) = self.streaming_limit else {
+      return true;
+    };
+    let retained = self.retained_buffer_capacity();
+    let Some(required) = self.blockquotes.len().checked_add(1) else {
+      self.fail_streaming(StreamingError::CapacityOverflow);
+      return false;
+    };
+    if let Err(error) = reserve_vec_accounted(&mut self.blockquotes, required, retained, limit) {
+      self.fail_streaming(error);
+      return false;
+    }
+    true
+  }
+
+  pub(crate) fn reserve_list_indent_width(&mut self) -> bool {
+    let Some(limit) = self.streaming_limit else {
+      return true;
+    };
+    let retained = self.retained_buffer_capacity();
+    let Some(required) = self.list_indent_widths.len().checked_add(1) else {
+      self.fail_streaming(StreamingError::CapacityOverflow);
+      return false;
+    };
+    if let Err(error) =
+      reserve_vec_accounted(&mut self.list_indent_widths, required, retained, limit)
+    {
+      self.fail_streaming(error);
+      return false;
+    }
+    true
+  }
+
+  pub(crate) fn set_pre_fence_language(&mut self, language: &str) -> bool {
+    if self.streaming_limit.is_none() {
+      self.pre_fence_lang.clear();
+      self.pre_fence_lang.push_str(language);
+      return true;
+    }
+    self.pre_fence_lang = String::new();
+    let Some(value) = self.retained_string_copy(language, 0) else {
+      return false;
+    };
+    self.pre_fence_lang = value;
+    true
+  }
+
+  pub(crate) fn release_closed_high_water(&mut self) {
+    if self.streaming_limit.is_none() {
+      return;
+    }
+    if self.depth_map[TAG_SCRIPT as usize] == 0 {
+      self.script_text_buffer = String::new();
+    }
+    if self.open_markers.is_empty() {
+      self.open_markers = Vec::new();
+    }
+    if self.code_spans.is_empty() {
+      self.code_spans = Vec::new();
+    }
+    if self.blockquotes.is_empty() {
+      self.blockquotes = Vec::new();
+    }
+    if self.list_indent_widths.is_empty() {
+      self.list_indent_widths = Vec::new();
+    }
+    if self.depth_map[TAG_A as usize] > 0
+      || !self.open_markers.is_empty()
+      || !self.code_spans.is_empty()
+      || self.code_fence.is_some()
+      || !self.blockquotes.is_empty()
+    {
+      return;
+    }
+    if self.last_yielded_length > 2 {
+      let mut drain_end = self.last_yielded_length - 2;
+      while drain_end > 0 && !self.buffer.is_char_boundary(drain_end) {
+        drain_end -= 1;
+      }
+      if drain_end > 0 {
+        if self.wrap_width != 0 {
+          let drained = &self.buffer[..drain_end];
+          self.buffer_start_column = if let Some(last_newline) = drained.rfind('\n') {
+            drained[last_newline + 1..].chars().count()
+          } else {
+            self
+              .buffer_start_column
+              .saturating_add(drained.chars().count())
+          };
+        }
+        let bytes = self.buffer.as_bytes();
+        self.flushed_tail = if drain_end >= 2 {
+          [bytes[drain_end - 2], bytes[drain_end - 1]]
+        } else {
+          [self.flushed_tail[1], bytes[0]]
+        };
+        self.buffer.drain(..drain_end);
+        self.last_yielded_length -= drain_end;
+        self.link_bracket_pos = self.link_bracket_pos.saturating_sub(drain_end);
+        self.last_content_cache_len = 0;
+      }
+    }
+    let threshold = self.buffer.len().saturating_mul(4).max(256);
+    if self.buffer.capacity() <= threshold {
+      return;
+    }
+    let old = std::mem::take(&mut self.buffer);
+    let replacement = self.retained_string_copy(&old, 0);
+    drop(old);
+    if let Some(replacement) = replacement {
+      self.buffer = replacement;
+    }
+  }
+
+  pub(crate) fn replace_output_range(
+    &mut self,
+    start: usize,
+    end: usize,
+    replacement: &str,
+  ) -> bool {
+    let Some(required_len) = self
+      .buffer
+      .len()
+      .checked_sub(end.saturating_sub(start))
+      .and_then(|len| len.checked_add(replacement.len()))
+    else {
+      self.fail_streaming(StreamingError::CapacityOverflow);
+      return false;
+    };
+    if !self.reserve_output_to(required_len) {
+      return false;
+    }
+    self.buffer.replace_range(start..end, replacement);
+    true
+  }
+
+  pub(crate) fn retained_string_copy(
+    &mut self,
+    value: &str,
+    additional_retained_capacity: usize,
+  ) -> Option<String> {
+    if self.streaming_error.is_some() {
+      return None;
+    }
+    let Some(limit) = self.streaming_limit else {
+      return Some(value.to_string());
+    };
+    let Some(retained) = self
+      .retained_buffer_capacity()
+      .checked_add(additional_retained_capacity)
+    else {
+      self.fail_streaming(StreamingError::CapacityOverflow);
+      return None;
+    };
+    let mut copy = String::new();
+    if let Err(error) = reserve_accounted(&mut copy, value.len(), retained, limit) {
+      self.fail_streaming(error);
+      return None;
+    }
+    copy.push_str(value);
+    Some(copy)
+  }
+
+  fn reserve_parse_scratch(&mut self, value: &mut String, additional: usize) -> bool {
+    let Some(limit) = self.streaming_limit else {
+      return true;
+    };
+    let Some(required_len) = value.len().checked_add(additional) else {
+      self.fail_streaming(StreamingError::CapacityOverflow);
+      return false;
+    };
+    let Some(retained) = self
+      .retained_buffer_capacity()
+      .checked_add(value.capacity())
+    else {
+      self.fail_streaming(StreamingError::CapacityOverflow);
+      return false;
+    };
+    if let Err(error) = reserve_accounted(value, required_len, retained, limit) {
+      self.fail_streaming(error);
+      return false;
+    }
+    true
+  }
+
+  fn push_parse_str(&mut self, value: &mut String, text: &str) -> bool {
+    if !self.reserve_parse_scratch(value, text.len()) {
+      return false;
+    }
+    value.push_str(text);
+    true
+  }
+
+  fn push_parse_char(&mut self, value: &mut String, character: char) -> bool {
+    if !self.reserve_parse_scratch(value, character.len_utf8()) {
+      return false;
+    }
+    value.push(character);
+    true
+  }
+
   #[inline]
   fn push_script_text(&mut self, text: &str) {
     if text.is_empty() {
       return;
+    }
+    if let Some(limit) = self.streaming_limit {
+      let Some(required_len) = self.script_text_buffer.len().checked_add(text.len()) else {
+        self.fail_streaming(StreamingError::CapacityOverflow);
+        return;
+      };
+      let retained = self.retained_buffer_capacity();
+      if let Err(error) =
+        reserve_accounted(&mut self.script_text_buffer, required_len, retained, limit)
+      {
+        self.fail_streaming(error);
+        return;
+      }
     }
     self.script_text_buffer.push_str(text);
     self.text_buffer_contains_non_whitespace = true;
@@ -579,11 +1131,16 @@ impl ConvertState {
 
   fn flush_script_text(&mut self) {
     if self.script_text_buffer.is_empty() {
+      if self.streaming_limit.is_some() {
+        self.script_text_buffer = String::new();
+      }
       return;
     }
     let mut script_text = std::mem::take(&mut self.script_text_buffer);
     self.process_text_buffer(&mut script_text);
-    self.script_text_buffer = script_text;
+    if self.streaming_limit.is_none() {
+      self.script_text_buffer = script_text;
+    }
   }
 
   fn process_script_chunk(&mut self, chunk: &str, start: usize) -> ScriptChunk {
@@ -617,7 +1174,7 @@ impl ConvertState {
     // Reuse text_buffer allocation from previous call if available
     let mut text_buffer = std::mem::take(&mut self.parse_text_buffer);
     text_buffer.clear();
-    if text_buffer.capacity() == 0 {
+    if self.streaming_limit.is_none() && text_buffer.capacity() == 0 {
       text_buffer.reserve(256);
     }
     let bytes = chunk.as_bytes();
@@ -644,7 +1201,7 @@ impl ConvertState {
       }
     }
 
-    while i < chunk_length && !self.depth_limit_reached {
+    while i < chunk_length && !self.depth_limit_reached && self.streaming_error.is_none() {
       if text_buffer.is_empty() {
         run_start = i;
       }
@@ -674,7 +1231,9 @@ impl ConvertState {
             }
             i += 1;
           }
-          text_buffer.push_str(&chunk[start..i]);
+          if !self.push_parse_str(&mut text_buffer, &chunk[start..i]) {
+            break;
+          }
           self.text_buffer_contains_non_whitespace = true;
           self.last_char_was_whitespace = false;
           self.just_closed_tag = false;
@@ -692,7 +1251,9 @@ impl ConvertState {
           while i < chunk_length && bytes[i] != LT_CHAR {
             i += 1;
           }
-          text_buffer.push_str(&chunk[start..i]);
+          if !self.push_parse_str(&mut text_buffer, &chunk[start..i]) {
+            break;
+          }
           self.text_buffer_contains_non_whitespace = true;
           self.last_char_was_whitespace = false;
           self.just_closed_tag = false;
@@ -716,9 +1277,13 @@ impl ConvertState {
             continue;
           }
           if self.in_pre {
-            text_buffer.push(cc as char);
-          } else if cc == SPACE_CHAR || !self.last_char_was_whitespace {
-            text_buffer.push(' ');
+            if !self.push_parse_char(&mut text_buffer, cc as char) {
+              break;
+            }
+          } else if (cc == SPACE_CHAR || !self.last_char_was_whitespace)
+            && !self.push_parse_char(&mut text_buffer, ' ')
+          {
+            break;
           }
           self.last_char_was_whitespace = true;
           self.text_buffer_contains_whitespace = true;
@@ -732,9 +1297,13 @@ impl ConvertState {
           // covers characters produced by decoded entities that never pass
           // through this parse loop.
           if cc < 0x80 {
-            text_buffer.push(cc as char);
+            if !self.push_parse_char(&mut text_buffer, cc as char) {
+              break;
+            }
           } else if let Some(ch) = chunk[i..].chars().next() {
-            text_buffer.push(ch);
+            if !self.push_parse_char(&mut text_buffer, ch) {
+              break;
+            }
             i += ch.len_utf8();
 
             continue;
@@ -789,7 +1358,9 @@ impl ConvertState {
           }
         }
         // Not a matching closing tag: treat '<' as literal text
-        text_buffer.push('<');
+        if !self.push_parse_char(&mut text_buffer, '<') {
+          break;
+        }
         self.text_buffer_contains_non_whitespace = true;
         self.last_char_was_whitespace = false;
         self.just_closed_tag = false;
@@ -902,7 +1473,9 @@ impl ConvertState {
 
         if tag_name_raw.is_empty() {
           // `<` followed by whitespace or `>` is not a tag: treat as literal text
-          text_buffer.push(bytes[i] as char);
+          if !self.push_parse_char(&mut text_buffer, bytes[i] as char) {
+            break;
+          }
           self.text_buffer_contains_non_whitespace = true;
           self.text_buffer_has_inline_gfm_hazard = true;
           self.last_char_was_whitespace = false;
@@ -956,7 +1529,11 @@ impl ConvertState {
     if carry || !text_buffer.is_empty() {
       let leftover = chunk[run_start..].to_string();
       text_buffer.clear();
-      self.parse_text_buffer = text_buffer;
+      self.parse_text_buffer = if self.streaming_limit.is_some() && text_buffer.is_empty() {
+        String::new()
+      } else {
+        text_buffer
+      };
       if leftover
         .as_bytes()
         .first()
@@ -966,7 +1543,11 @@ impl ConvertState {
       }
       leftover
     } else {
-      self.parse_text_buffer = text_buffer;
+      self.parse_text_buffer = if self.streaming_limit.is_some() && text_buffer.is_empty() {
+        String::new()
+      } else {
+        text_buffer
+      };
       String::new()
     }
   }
@@ -1063,13 +1644,19 @@ impl ConvertState {
       let mut buf = leftover.to_string();
       self.process_text_buffer(&mut buf);
     }
-    while !self.stack.is_empty() {
+    while !self.stack.is_empty() && self.streaming_error.is_none() {
       self.close_node();
     }
   }
 
   pub fn get_markdown_chunk(&mut self) -> String {
+    if self.streaming_error.is_some() {
+      return String::new();
+    }
     self.flush_streaming_blockquote_lines();
+    if self.streaming_error.is_some() {
+      return String::new();
+    }
     let buf_len = self.buffer.len();
     // Trailing spaces at the buffer end are never final outside <pre>: a later
     // block close (or a dropped empty element followed by a block) trims them,
@@ -1290,4 +1877,81 @@ pub(crate) struct OpeningTagResult {
 pub(crate) struct CloseTagResult {
   complete: bool,
   new_position: usize,
+}
+
+#[cfg(test)]
+mod bounded_buffer_tests {
+  use super::*;
+  use std::cell::Cell;
+
+  #[test]
+  fn requested_capacity_is_charged_before_allocating() {
+    let called = Cell::new(false);
+    let mut value = String::new();
+    let error = reserve_accounted_with(&mut value, 1, 0, 0, |_, _| {
+      called.set(true);
+      unreachable!()
+    })
+    .unwrap_err();
+
+    assert_eq!(error, StreamingError::BufferLimitExceeded);
+    assert!(!called.get());
+    assert_eq!(value.capacity(), 0);
+  }
+
+  #[test]
+  fn allocator_over_capacity_is_reconciled_and_dropped() {
+    let mut value = String::new();
+    let error = reserve_accounted_with(&mut value, 1, 0, 8, |value, additional| {
+      value.try_reserve_exact(additional)?;
+      value.reserve(64);
+      Ok(())
+    })
+    .unwrap_err();
+
+    assert_eq!(error, StreamingError::BufferLimitExceeded);
+    assert_eq!(value.capacity(), 0);
+  }
+
+  #[test]
+  fn allocation_failure_and_capacity_overflow_are_distinct() {
+    let mut value = String::new();
+    let allocation_error = reserve_accounted_with(&mut value, 1, 0, usize::MAX, |value, _| {
+      value.try_reserve_exact(usize::MAX)
+    })
+    .unwrap_err();
+    assert_eq!(allocation_error, StreamingError::AllocationFailed);
+
+    let overflow =
+      reserve_accounted(&mut value, isize::MAX as usize + 1, 0, usize::MAX).unwrap_err();
+    assert_eq!(overflow, StreamingError::CapacityOverflow);
+  }
+
+  #[test]
+  fn vector_capacity_is_charged_and_reconciled() {
+    let called = Cell::new(false);
+    let mut value = Vec::<usize>::new();
+    let error = reserve_vec_accounted_with(&mut value, 1, 0, 0, |_, _| {
+      called.set(true);
+      unreachable!()
+    })
+    .unwrap_err();
+    assert_eq!(error, StreamingError::BufferLimitExceeded);
+    assert!(!called.get());
+
+    let mut value = Vec::<u8>::new();
+    let error = reserve_vec_accounted_with(&mut value, 1, 0, 8, |value, additional| {
+      value.try_reserve_exact(additional)?;
+      value.reserve(64);
+      Ok(())
+    })
+    .unwrap_err();
+    assert_eq!(error, StreamingError::BufferLimitExceeded);
+    assert_eq!(value.capacity(), 0);
+
+    let mut value = Vec::<usize>::new();
+    let overflow =
+      reserve_vec_accounted(&mut value, isize::MAX as usize, 0, usize::MAX).unwrap_err();
+    assert_eq!(overflow, StreamingError::CapacityOverflow);
+  }
 }
