@@ -117,6 +117,9 @@ interface CodeFence {
 
 interface BlockquoteFrame {
   fragment: number
+  cursor: BufferPosition
+  lineStart: boolean
+  materializedPrefixWidth: number
   listIndent: string
 }
 
@@ -134,6 +137,10 @@ interface LineContext {
 interface CompactResult {
   emitted: BufferPosition
   retainedContext: LineContext
+  mutableFragment?: {
+    previous: string
+    current: string
+  }
 }
 
 interface FragmentRange {
@@ -857,6 +864,62 @@ function joinBufferRange(buffer: string[], start: BufferPosition, end: BufferPos
   return content
 }
 
+function bufferRangeIncludesCode(
+  buffer: string[],
+  start: BufferPosition,
+  end: BufferPosition,
+  code: number,
+): boolean {
+  for (let ordinal = start.ordinal; ordinal <= end.ordinal && ordinal < buffer.length; ordinal++) {
+    const fragment = buffer[ordinal]!
+    const from = ordinal === start.ordinal ? start.offset : 0
+    const to = ordinal === end.ordinal ? end.offset : fragment.length
+    for (let offset = from; offset < to; offset++) {
+      if (fragment.charCodeAt(offset) === code)
+        return true
+    }
+  }
+  return false
+}
+
+function replaceBufferRange(
+  buffer: string[],
+  start: BufferPosition,
+  end: BufferPosition,
+  replacement: string,
+): BufferPosition {
+  if (compareBufferPositions(start, end) >= 0) {
+    if (!replacement)
+      return start
+    if (start.ordinal === buffer.length) {
+      buffer.push(replacement)
+      return { ordinal: start.ordinal, offset: replacement.length }
+    }
+    const fragment = buffer[start.ordinal]!
+    buffer[start.ordinal] = `${fragment.slice(0, start.offset)}${replacement}${fragment.slice(start.offset)}`
+    return { ordinal: start.ordinal, offset: start.offset + replacement.length }
+  }
+
+  let endOrdinal = end.ordinal
+  let endOffset = end.offset
+  if (endOffset === 0) {
+    endOrdinal--
+    endOffset = buffer[endOrdinal]!.length
+  }
+
+  if (start.ordinal === endOrdinal) {
+    const fragment = buffer[start.ordinal]!
+    buffer[start.ordinal] = `${fragment.slice(0, start.offset)}${replacement}${fragment.slice(endOffset)}`
+    return { ordinal: start.ordinal, offset: start.offset + replacement.length }
+  }
+
+  buffer[start.ordinal] = buffer[start.ordinal]!.slice(0, start.offset)
+  for (let ordinal = start.ordinal + 1; ordinal < endOrdinal; ordinal++)
+    buffer[ordinal] = ''
+  buffer[endOrdinal] = `${replacement}${buffer[endOrdinal]!.slice(endOffset)}`
+  return { ordinal: endOrdinal, offset: replacement.length }
+}
+
 function lineContextAtPosition(
   buffer: string[],
   end: BufferPosition,
@@ -908,24 +971,20 @@ function compactBuffer(
   }
   if (retainMutableFragments && emitted.ordinal < buffer.length) {
     const mutableOrdinal = emitted.ordinal
-    const mutableStart = fragmentStart(mutableOrdinal)
-    const context = compareBufferPositions(contextStart, mutableStart) < 0
-      ? joinBufferRange(buffer, contextStart, mutableStart)
-      : ''
-    const retainedContext = lineContextAtPosition(
-      buffer,
-      context ? contextStart : mutableStart,
-      initialLineContext,
-    )
-    const retained = buffer.slice(mutableOrdinal)
+    const previous = buffer[mutableOrdinal]!
+    const current = previous.slice(emitted.offset)
+    const context = joinBufferRange(buffer, contextStart, emitted)
+    const retainedContext = lineContextAtPosition(buffer, contextStart, initialLineContext)
+    const retained = [current, ...buffer.slice(mutableOrdinal + 1)]
     buffer.length = 0
     if (context)
       buffer.push(context)
     for (const fragment of retained)
       buffer.push(fragment)
     return {
-      emitted: { ordinal: context ? 1 : 0, offset: emitted.offset },
+      emitted: { ordinal: context ? 1 : 0, offset: 0 },
       retainedContext,
+      mutableFragment: { previous, current },
     }
   }
 
@@ -1074,10 +1133,38 @@ function finalizeCodeFence(state: MarkdownState): string | undefined {
   return delimiter
 }
 
-function stripBlockquoteListIndent(line: string, listIndent: string): string {
-  return listIndent && line.startsWith(listIndent)
-    ? line.slice(listIndent.length)
-    : line
+function prefixBlockquoteContent(content: string, frame: BlockquoteFrame): string {
+  let output = ''
+  let offset = 0
+  while (offset < content.length) {
+    const newline = content.indexOf('\n', offset)
+    const lineEnd = newline < 0 ? content.length : newline
+    if (frame.lineStart) {
+      const line = content.slice(offset, lineEnd)
+      const hadListIndent = Boolean(frame.listIndent && line.startsWith(frame.listIndent))
+      const unindented = hadListIndent
+        ? line.slice(frame.listIndent.length)
+        : line
+      const prefix = `${frame.listIndent}>`
+      output += unindented ? `${prefix} ${unindented}` : prefix
+      frame.materializedPrefixWidth = hadListIndent
+        ? 2
+        : frame.listIndent.length + (unindented ? 2 : 1)
+    }
+    else {
+      output += content.slice(offset, lineEnd)
+    }
+
+    if (newline < 0) {
+      frame.lineStart = false
+      break
+    }
+    output += '\n'
+    frame.lineStart = true
+    frame.materializedPrefixWidth = 0
+    offset = newline + 1
+  }
+  return output
 }
 
 function finalizeBlockquote(state: MarkdownState): void {
@@ -1086,17 +1173,20 @@ function finalizeBlockquote(state: MarkdownState): void {
     return
   state.bufferedBlockquoteDepth = state.blockquotes.length
 
-  const content = state.buffer.slice(frame.fragment).join('').replace(/[ \t\r\n]+$/, '')
-  const prefix = `${frame.listIndent}>`
+  const bufferEndPosition = bufferEnd(state.buffer)
+  const contentEnd = retreatBufferPosition(
+    state.buffer,
+    bufferEndPosition,
+    frame.cursor,
+    code => code === 32 || code === 9 || code === 10 || code === 13,
+  )
+  const content = joinBufferRange(state.buffer, frame.cursor, contentEnd)
   const quoted = content
-    .split('\n')
-    .map((line) => {
-      const unindented = stripBlockquoteListIndent(line, frame.listIndent)
-      return unindented ? `${prefix} ${unindented}` : prefix
-    })
-    .join('\n')
-
-  state.buffer.splice(frame.fragment, state.buffer.length - frame.fragment, quoted)
+    ? prefixBlockquoteContent(content, frame)
+    : frame.lineStart
+      ? `${frame.listIndent}>`
+      : ''
+  replaceBufferRange(state.buffer, frame.cursor, bufferEndPosition, quoted)
   state.lastContentCache = quoted
 }
 
@@ -1208,10 +1298,20 @@ function commitGfmAction(
 ): void {
   switch (action._tag) {
     case 'BlockquoteEnter':
-      if (state.blockquotes.length > 0)
+      if (state.blockquotes.length > 0) {
+        const parent = state.blockquotes.at(-1)!
         collapseNestedBlockquoteSeparator(state.buffer)
+        const end = bufferEnd(state.buffer)
+        if (compareBufferPositions(parent.cursor, end) < 0 && bufferCodeBefore(state.buffer, end) !== 10) {
+          state.buffer.push('\n')
+          state.lastContentCache = '\n'
+        }
+      }
       state.blockquotes.push({
         fragment: state.buffer.length,
+        cursor: bufferEnd(state.buffer),
+        lineStart: true,
+        materializedPrefixWidth: 0,
         listIndent: state.listIndent,
       })
       state.bufferedBlockquoteDepth = state.blockquotes.length
@@ -1333,8 +1433,11 @@ export function createMarkdownProcessor(options: EngineOptions = {}, resolvedPlu
       gfmLifecycle.openCodeSpans[index]!.fragment = restoredFragment(snapshot.spans[index]!)
     if (snapshot.fence && state.codeFence)
       state.codeFence.fragment = restoredFragment(snapshot.fence)
-    for (let index = 0; index < snapshot.blockquotes.length; index++)
-      state.blockquotes[index]!.fragment = restoredFragment(snapshot.blockquotes[index]!)
+    for (let index = 0; index < snapshot.blockquotes.length; index++) {
+      const fragment = restoredFragment(snapshot.blockquotes[index]!)
+      state.blockquotes[index]!.fragment = fragment
+      state.blockquotes[index]!.cursor = fragmentStart(fragment)
+    }
     if (snapshot.link && openLinkFragment >= 0)
       openLinkFragment = restoredFragment(snapshot.link)
   }
@@ -1394,9 +1497,15 @@ export function createMarkdownProcessor(options: EngineOptions = {}, resolvedPlu
 
       const wrapWidth = state.options?.wrapWidth
       if (wrapWidth && canWrapHere(state.depthMap)) {
+        const bufferEndPosition = bufferEnd(state.buffer)
+        let column = currentColumn(state.buffer, bufferBaseLineContext.column, bufferBaseLineContext.trailingHighSurrogate)
+        for (const frame of state.blockquotes) {
+          if (!frame.lineStart && !bufferRangeIncludesCode(state.buffer, frame.cursor, bufferEndPosition, 10))
+            column = Math.max(0, column - frame.materializedPrefixWidth)
+        }
         const wrapped = wrapText(
           textNode.value,
-          currentColumn(state.buffer, bufferBaseLineContext.column, bufferBaseLineContext.trailingHighSurrogate),
+          column,
           wrapWidth,
           continuationPrefix(textNode, state.listIndentWidths, state.blockquotes.length === 0),
         )
@@ -1442,7 +1551,10 @@ export function createMarkdownProcessor(options: EngineOptions = {}, resolvedPlu
     if (!state.plainText && state.preFencePending && consumePendingPreChild(state, node, eventType))
       return
 
-    let lastBuffEntry = buff.at(-1)!
+    let lastBuffIndex = buff.length - 1
+    while (lastBuffIndex >= 0 && !buff[lastBuffIndex])
+      lastBuffIndex--
+    let lastBuffEntry = buff[lastBuffIndex]!
     let lastChar = lastBuffEntry?.charAt(lastBuffEntry.length - 1) || ''
 
     if (node.type === TEXT_NODE && eventType === NodeEventEnter) {
@@ -1723,6 +1835,8 @@ export function createMarkdownProcessor(options: EngineOptions = {}, resolvedPlu
               if (buff?.length && buff.at(-1) === lastFragment) {
                 buff[buff.length - 1] = trimmed
               }
+              if (state.lastContentCache === lastFragment)
+                state.lastContentCache = trimmed
               if (eventType === NodeEventExit && isInlineElement)
                 state.pendingInlineWhitespace = true
             }
@@ -1854,8 +1968,13 @@ export function createMarkdownProcessor(options: EngineOptions = {}, resolvedPlu
     if (resolvedPlugins.length)
       emittedPosition = bufferPositionAtOffset(buffer, emittedPluginOffset)
     const trimLeading = !hasYieldedContent && !(state.plainText && preserveLeadingWhitespace)
-    if (trimLeading)
-      emittedPosition = trimBufferStart(buffer, emittedPosition)
+    if (trimLeading) {
+      const trimmed = trimBufferStart(buffer, emittedPosition)
+      const firstQuote = state.blockquotes[0]?.cursor
+      emittedPosition = firstQuote && compareBufferPositions(trimmed, firstQuote) > 0
+        ? firstQuote
+        : trimmed
+    }
     const contentStart = trimLeading ? emittedPosition : fragmentStart(0)
     const end = bufferEnd(buffer)
     const inPre = state.depthMap[TAG_PRE] !== 0
@@ -1880,7 +1999,14 @@ export function createMarkdownProcessor(options: EngineOptions = {}, resolvedPlu
       // Block spacing and trailing spaces can still be trimmed by a later
       // element close or by finalization. Keep them buffered until following
       // content makes them stable.
-      stablePosition = retreatBufferPosition(buffer, stablePosition, contentStart, code => code === 32 || code === 10)
+      stablePosition = retreatBufferPosition(
+        buffer,
+        stablePosition,
+        contentStart,
+        state.blockquotes.length
+          ? code => code === 32 || code === 9 || code === 10 || code === 13
+          : code => code === 32 || code === 10,
+      )
       retainMutableFragments = compareBufferPositions(stablePosition, end) < 0
     }
 
@@ -1919,7 +2045,7 @@ export function createMarkdownProcessor(options: EngineOptions = {}, resolvedPlu
       if (compareBufferPositions(fencePosition, stablePosition) < 0)
         stablePosition = fencePosition
     }
-    const blockquoteHeld = state.blockquotes.length > 0
+    const blockquoteHeld = state.blockquotes.length > 0 && resolvedPlugins.length > 0
     if (blockquoteHeld) {
       let blockquotePosition = trimBufferedWhitespacePosition(
         buffer,
@@ -1957,7 +2083,38 @@ export function createMarkdownProcessor(options: EngineOptions = {}, resolvedPlu
       retainMutableFragments = true
     }
 
-    const newContent = joinBufferRange(buffer, emittedPosition, stablePosition)
+    const previousEmittedPosition = emittedPosition
+    const rawContent = joinBufferRange(buffer, previousEmittedPosition, stablePosition)
+    let newContent = rawContent
+    if (!resolvedPlugins.length && rawContent && state.blockquotes.length) {
+      const emittedOffset = bufferOffsetAtPosition(buffer, emittedPosition)
+      const stableOffset = bufferOffsetAtPosition(buffer, stablePosition)
+      for (let index = state.blockquotes.length - 1; index >= 0; index--) {
+        const frame = state.blockquotes[index]!
+        if (compareBufferPositions(frame.cursor, stablePosition) >= 0)
+          continue
+        const frameOffset = bufferOffsetAtPosition(buffer, frame.cursor)
+        const contentOffset = Math.max(0, Math.min(stableOffset - emittedOffset, frameOffset - emittedOffset))
+        newContent = newContent.slice(0, contentOffset)
+          + prefixBlockquoteContent(newContent.slice(contentOffset), frame)
+        frame.cursor = stablePosition
+      }
+    }
+    if (!resolvedPlugins.length && newContent !== rawContent) {
+      const formattedPosition = replaceBufferRange(buffer, previousEmittedPosition, stablePosition, newContent)
+      state.lastContentCache = ''
+      for (let ordinal = buffer.length - 1; ordinal >= 0; ordinal--) {
+        if (buffer[ordinal]) {
+          state.lastContentCache = buffer[ordinal]!
+          break
+        }
+      }
+      for (const frame of state.blockquotes) {
+        if (compareBufferPositions(frame.cursor, stablePosition) === 0)
+          frame.cursor = formattedPosition
+      }
+      stablePosition = formattedPosition
+    }
     emittedPosition = stablePosition
     if (resolvedPlugins.length)
       emittedPluginOffset = bufferOffsetAtPosition(buffer, emittedPosition)
@@ -1971,7 +2128,37 @@ export function createMarkdownProcessor(options: EngineOptions = {}, resolvedPlu
     if (!markerHeld && !codeSpanHeld && !codeFenceHeld && !blockquoteHeld && !linkHeld && (!retainMutableFragments || !inPre)) {
       if (!resolvedPlugins.length && !state.depthMap[TAG_A]) {
         if (hasYieldedContent) {
+          const previousEmitted = emittedPosition
           const compacted = compactBuffer(buffer, emittedPosition, retainMutableFragments, bufferBaseLineContext)
+          const mutableFragment = compacted.mutableFragment
+          if (mutableFragment && mutableFragment.previous === state.lastContentCache)
+            state.lastContentCache = mutableFragment.current
+          for (const frame of state.blockquotes) {
+            const fragmentComparison = compareBufferPositions(fragmentStart(frame.fragment), previousEmitted)
+            if (fragmentComparison < 0) {
+              frame.fragment = 0
+            }
+            else if (retainMutableFragments) {
+              frame.fragment = frame.fragment - previousEmitted.ordinal + compacted.emitted.ordinal
+            }
+            else {
+              frame.fragment = compacted.emitted.ordinal
+            }
+            if (compareBufferPositions(frame.cursor, previousEmitted) <= 0) {
+              frame.cursor = compacted.emitted
+            }
+            else if (retainMutableFragments) {
+              frame.cursor = {
+                ordinal: frame.cursor.ordinal - previousEmitted.ordinal + compacted.emitted.ordinal,
+                offset: frame.cursor.ordinal === previousEmitted.ordinal
+                  ? frame.cursor.offset - previousEmitted.offset
+                  : frame.cursor.offset,
+              }
+            }
+            else {
+              frame.cursor = compacted.emitted
+            }
+          }
           bufferBaseLineContext = compacted.retainedContext
           emittedPosition = compacted.emitted
         }

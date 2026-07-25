@@ -1,6 +1,9 @@
+import type { ParseState } from '../../src/parse'
 import type { MdreamOptions, TransformPlugin } from '../../src/types'
 import { describe, expect, it } from 'vitest'
 import { createPlugin, htmlToMarkdown, streamHtmlToMarkdown } from '../../src/index'
+import { createMarkdownProcessor } from '../../src/markdown-processor'
+import { finalizeParse, parseHtmlStream } from '../../src/parse'
 
 function chunkedStream(html: string, chunkSize: number): ReadableStream<string> {
   return new ReadableStream({
@@ -100,6 +103,77 @@ describe('streaming drain parity', () => {
 
     for (const chunkSize of [1, 3, 7, 16, 40])
       expect(await streamConvert(BLOCK_NEWLINE_HTML, chunkSize), `chunkSize=${chunkSize}`).toBe(expected)
+  })
+
+  it.each([
+    ['nested quotes', '<blockquote><p>outer</p><blockquote><blockquote><p>inner</p></blockquote></blockquote><p>tail</p></blockquote>', {}],
+    ['quote in list', '<ul><li>before<blockquote><p>quoted</p><ul><li>nested</li></ul></blockquote>after</li></ul>', {}],
+    ['list in quote', '<blockquote><ol><li>one</li><li><strong>two</strong></li></ol></blockquote>', {}],
+    ['hard breaks', '<blockquote><p>first<br>second<br><br>fourth</p></blockquote>', {}],
+    ['links and markers', '<blockquote><p><a href="/x">link</a> <strong>bold</strong> <em>em</em> <code>a`b</code></p></blockquote>', {}],
+    ['fenced code', '<blockquote><pre><code>alpha\n```\nomega</code></pre></blockquote>', {}],
+    ['wrapping', '<blockquote><p>The quick brown fox jumps over the lazy dog and keeps running every day.</p></blockquote>', { wrapWidth: 24 }],
+    ['wrapped list', '<blockquote><ul><li>a b c</li></ul></blockquote>', { wrapWidth: 8 }],
+    ['wrapped quote in list', '<ul><li><blockquote><span>a b </span><span>c d e</span></blockquote></li></ul>', { wrapWidth: 5 }],
+    ['bare text siblings', 'x<blockquote>y</blockquote>z', {}],
+    ['inline sibling whitespace', '<blockquote><span>a </span><span>b</span></blockquote>', {}],
+    ['hard break after space', '<blockquote><span>a </span><br>b</blockquote>', {}],
+    ['nested quote in list', '<ul><li><blockquote><p>a</p><blockquote>b</blockquote><p>c</p></blockquote></li></ul>', {}],
+  ] as const)('keeps streamed blockquote %s exact at every split', async (_name, html, options) => {
+    const expected = htmlToMarkdown(html, options)
+    for (let split = 0; split <= html.length; split++) {
+      expect(
+        await streamChunks([html.slice(0, split), html.slice(split)], options),
+        `split=${split}`,
+      ).toBe(expected)
+    }
+  })
+
+  it('yields a 2 MiB quote before close and retains only frame context', () => {
+    const content = 'a'.repeat(2 * 1024 * 1024)
+    const processor = createMarkdownProcessor()
+    const parseState: ParseState = {
+      depthMap: processor.state.depthMap,
+      depth: 0,
+    }
+    const handleEvent = processor.processEvent
+
+    let leftover = parseHtmlStream('<blockquote><p>', parseState, handleEvent)
+    let beforeClose = processor.getMarkdownChunk()
+    for (let offset = 0; offset < content.length; offset += 8 * 1024) {
+      leftover = parseHtmlStream(leftover + content.slice(offset, offset + 8 * 1024), parseState, handleEvent)
+      beforeClose += processor.getMarkdownChunk()
+      expect(processor.state.buffer.reduce((length, fragment) => length + fragment.length, 0)).toBeLessThan(32)
+    }
+    leftover = parseHtmlStream(`${leftover}</p>`, parseState, handleEvent)
+    beforeClose += processor.getMarkdownChunk()
+    expect(beforeClose.length).toBe(content.length + 2)
+    expect(beforeClose.startsWith('> ')).toBe(true)
+    expect(beforeClose.endsWith('a')).toBe(true)
+
+    leftover = parseHtmlStream(`${leftover}</blockquote>`, parseState, handleEvent)
+    finalizeParse(leftover, parseState, handleEvent)
+    expect(beforeClose + processor.getMarkdownChunk(true)).toBe(`> ${content}`)
+  }, 30_000)
+
+  it('keeps blockquote cursors valid across plugin fragment rewrites', async () => {
+    function coalescingPlugin(): TransformPlugin {
+      return createPlugin({
+        onNodeEnter(node, state) {
+          if (node.name === 'span')
+            state.buffer.splice(0, state.buffer.length, state.buffer.join(''))
+        },
+      })
+    }
+    const html = '<blockquote><p>before <span>inside</span> after</p></blockquote>'
+    const expected = htmlToMarkdown(html, { hooks: [coalescingPlugin()] })
+
+    for (let split = 0; split <= html.length; split++) {
+      expect(await streamChunks(
+        [html.slice(0, split), html.slice(split)],
+        { hooks: [coalescingPlugin()] },
+      ), `split=${split}`).toBe(expected)
+    }
   })
 
   it('preserves cumulative plugin buffer fragments and array identity', async () => {
