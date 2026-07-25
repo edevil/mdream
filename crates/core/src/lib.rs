@@ -500,8 +500,10 @@ impl MarkdownStreamProcessor {
 ///
 /// Returned chunks are caller-owned and are not charged to the ceiling. If a
 /// later call fails, chunks returned by earlier calls cannot be rolled back.
-/// Attributes, tables, plugins, node pools, and transient conversion
-/// allocations are not included in this retained-buffer foundation.
+/// Parser stacks, attributes, tables, node pools, and mutable output windows
+/// are charged. Configuration, returned output, and transient allocations are
+/// outside the ceiling. Frontmatter and extraction remain unsupported because
+/// this API has no result channel for their structured side data.
 pub struct BoundedMarkdownStreamProcessor {
   state: ConvertState,
   buffer: String,
@@ -650,7 +652,9 @@ mod drain_equiv {
   //! that diverge from one-shot but must stay drain-invariant.
 
   use super::MarkdownStreamProcessor;
-  use super::types::{CleanConfig, HTMLToMarkdownOptions};
+  use super::types::{
+    CleanConfig, ExtractionConfig, FrontmatterConfig, HTMLToMarkdownOptions, PluginConfig,
+  };
 
   const CORPUS: &[&str] = &[
     // Breadth: chunk-invariant cases.
@@ -761,5 +765,36 @@ mod drain_equiv {
       r#"<a href="https://example.com">https://example.com</a>"#,
       512,
     );
+  }
+
+  #[test]
+  fn plugin_side_data_does_not_disable_output_draining() {
+    for plugins in [
+      PluginConfig {
+        frontmatter: Some(FrontmatterConfig::default()),
+        ..Default::default()
+      },
+      PluginConfig {
+        extraction: Some(ExtractionConfig::new(&["p"])),
+        ..Default::default()
+      },
+    ] {
+      let mut processor = MarkdownStreamProcessor::new(HTMLToMarkdownOptions {
+        plugins: Some(plugins),
+        ..Default::default()
+      });
+      drop(processor.process_chunk(
+        r#"<head><title>Title</title><meta name="description" content="Summary"></head>"#,
+      ));
+      for _ in 0..10_000 {
+        drop(processor.process_chunk("<p>body</p>"));
+        assert!(
+          processor.state.buffer.len() < 1024,
+          "plugin retained {} bytes of drained body output",
+          processor.state.buffer.len()
+        );
+      }
+      drop(processor.finish());
+    }
   }
 }

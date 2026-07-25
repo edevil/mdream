@@ -248,8 +248,11 @@ impl ConvertState {
         overflow.suppressed_depth = overflow.suppressed_depth.saturating_add(1);
       }
     } else {
+      let Some(root_name) = self.retained_string_copy(tag_name, 0) else {
+        return;
+      };
       self.overflow = Some(OverflowState {
-        root_name: tag_name.to_string(),
+        root_name,
         root_depth: 1,
         suppressed_name: None,
         suppressed_depth: 0,
@@ -275,12 +278,21 @@ impl ConvertState {
           | TAG_DATALIST
       )
     );
-    if suppresses_subtree && overflow.suppressed_name.is_none() {
-      overflow.suppressed_name = Some(tag_name.to_string());
+    let needs_suppressed_name = suppresses_subtree && overflow.suppressed_name.is_none();
+    if needs_suppressed_name {
+      let Some(suppressed_name) = self.retained_string_copy(tag_name, 0) else {
+        return;
+      };
+      let overflow = self.overflow.as_mut().expect("overflow was initialized");
+      overflow.suppressed_name = Some(suppressed_name);
       overflow.suppressed_depth = 1;
     }
     if handler.is_non_nesting {
-      overflow.raw_name = Some(tag_name.to_string());
+      let Some(raw_name) = self.retained_string_copy(tag_name, 0) else {
+        return;
+      };
+      let overflow = self.overflow.as_mut().expect("overflow was initialized");
+      overflow.raw_name = Some(raw_name);
       overflow.raw_mode = raw_mode;
       overflow.raw_is_script = tag_id == Some(TAG_SCRIPT) && tag_name == "script";
       self.script_data_state = SCRIPT_DATA;
@@ -401,10 +413,7 @@ impl ConvertState {
         .last()
         .is_some_and(|p| p.tag_id == Some(TAG_TITLE))
     {
-      let val = text_buffer.trim().to_string();
-      if !val.is_empty() {
-        self.frontmatter_title = Some(val);
-      }
+      self.capture_frontmatter_title(text_buffer);
       text_buffer.clear();
       return;
     }
@@ -485,9 +494,46 @@ impl ConvertState {
 
     if !self.extraction_tracked.is_empty() {
       let current_depth = self.stack.len();
-      for tracked in &mut self.extraction_tracked {
-        if tracked.stack_depth <= current_depth {
-          tracked.text_content.push_str(&text);
+      for index in 0..self.extraction_tracked.len() {
+        if self.extraction_tracked[index].stack_depth <= current_depth
+          && !self.extraction_tracked[index].limit_exceeded
+        {
+          let Some(required) = self.extraction_tracked[index]
+            .text_content
+            .len()
+            .checked_add(text.len())
+          else {
+            self.extraction_tracked[index].limit_exceeded = true;
+            self.extraction_tracked[index].text_content = String::new();
+            continue;
+          };
+          let retained_by_result = tracked_extraction_bytes(&self.extraction_tracked[index], true)
+            .saturating_sub(self.extraction_tracked[index].text_content.capacity())
+            .saturating_add(required);
+          if retained_by_result > MAX_EXTRACTION_RESULT_BYTES {
+            self.extraction_tracked[index].limit_exceeded = true;
+            self.extraction_tracked[index].text_content = String::new();
+            continue;
+          }
+          let retained = self.extraction_retained_capacity();
+          let tracked = &mut self.extraction_tracked[index];
+          if reserve_accounted(
+            &mut tracked.text_content,
+            required,
+            retained,
+            MAX_EXTRACTION_BYTES,
+          )
+          .is_err()
+          {
+            tracked.limit_exceeded = true;
+            tracked.text_content = String::new();
+          } else {
+            tracked.text_content.push_str(&text);
+            if tracked_extraction_bytes(tracked, true) > MAX_EXTRACTION_RESULT_BYTES {
+              tracked.limit_exceeded = true;
+              tracked.text_content = String::new();
+            }
+          }
         }
       }
     }
@@ -612,6 +658,15 @@ impl ConvertState {
         new_position: position,
         self_closing: false,
         skip: false,
+      };
+    }
+    if attributes.limit_exceeded() && self.streaming_limit.is_some() {
+      self.fail_streaming(StreamingError::ParserLimitExceeded);
+      return OpeningTagResult {
+        complete: true,
+        new_position,
+        self_closing: false,
+        skip: true,
       };
     }
 
@@ -1022,11 +1077,7 @@ impl ConvertState {
                 .is_some_and(|allowed| allowed.iter().any(|a| a == n_str)),
             };
             if is_allowed {
-              if let Some(entry) = self.frontmatter_meta.iter_mut().find(|(k, _)| k == n) {
-                entry.1.clone_from(c);
-              } else {
-                self.frontmatter_meta.push((n.clone(), c.clone()));
-              }
+              self.capture_frontmatter_meta(n, c);
             }
           }
         }
@@ -1050,35 +1101,73 @@ impl ConvertState {
     }
 
     if !tag.is_inline {
+      if !self.reserve_block_parent() {
+        return OpeningTagResult {
+          complete: true,
+          new_position,
+          self_closing,
+          skip: true,
+        };
+      }
       let idx = self.stack.len();
       self.first_block_parent_index = Some(idx);
       self.block_parent_indices.push(idx);
     }
 
-    self.push_tokenizer_context(tag_name, tag_id);
+    if !self.push_tokenizer_context(tag_name, tag_id) || !self.reserve_stack_node(&tag) {
+      return OpeningTagResult {
+        complete: true,
+        new_position,
+        self_closing,
+        skip: true,
+      };
+    }
     self.stack.push(tag);
 
     // Extraction
+    let mut new_extractions = Vec::new();
     if !self.extraction_parsed_selectors.is_empty()
       && let Some(element) = self.stack.last()
     {
       let stack_depth = self.stack.len();
       for (selector, parsed) in &self.extraction_parsed_selectors {
+        if self.extraction_tracked.len() + new_extractions.len() >= MAX_ACTIVE_EXTRACTIONS
+          || self.extraction_tracked.len() + self.extraction_results.len() + new_extractions.len()
+            >= MAX_EXTRACTION_RESULTS
+        {
+          break;
+        }
         if matches_selector(element, parsed) {
           let attrs: Vec<(String, String)> = element
             .attributes
             .iter()
             .map(|(k, v)| (k.clone(), v.clone()))
             .collect();
-          self.extraction_tracked.push(TrackedExtraction {
+          let tracked = TrackedExtraction {
             selector: selector.clone(),
             stack_depth,
             text_content: String::new(),
             tag_name: element.name().to_string(),
             attributes: attrs,
-          });
+            limit_exceeded: false,
+          };
+          let pending = new_extractions
+            .iter()
+            .map(|item| tracked_extraction_bytes(item, true))
+            .sum::<usize>();
+          if self
+            .extraction_retained_capacity()
+            .saturating_add(pending)
+            .saturating_add(tracked_extraction_bytes(&tracked, true))
+            <= MAX_EXTRACTION_BYTES
+          {
+            new_extractions.push(tracked);
+          }
         }
       }
+    }
+    for tracked in new_extractions {
+      self.push_tracked_extraction(tracked);
     }
 
     // Inline emit (no callback!)
@@ -1165,12 +1254,21 @@ impl ConvertState {
       while i < self.extraction_tracked.len() {
         if self.extraction_tracked[i].stack_depth == current_depth {
           let tracked = self.extraction_tracked.swap_remove(i);
-          self.extraction_results.push(ExtractedElement {
-            selector: tracked.selector,
-            tag_name: tracked.tag_name,
-            text_content: tracked.text_content.trim().to_string(),
-            attributes: tracked.attributes,
-          });
+          if !tracked.limit_exceeded && self.extraction_results.len() < MAX_EXTRACTION_RESULTS {
+            let mut text_content = tracked.text_content;
+            let start = text_content.len() - text_content.trim_start().len();
+            let end = text_content.trim_end().len();
+            text_content.truncate(end);
+            if start > 0 {
+              text_content.drain(..start);
+            }
+            self.push_extraction_result(ExtractedElement {
+              selector: tracked.selector,
+              tag_name: tracked.tag_name,
+              text_content,
+              attributes: tracked.attributes,
+            });
+          }
         } else {
           i += 1;
         }
@@ -1525,7 +1623,9 @@ impl ConvertState {
     node.attributes.clear();
     node.custom_name = None;
     node.tailwind = None;
-    self.node_pool.push(node);
+    if self.streaming_limit.is_none() && self.node_pool.len() < MAX_NODE_POOL_SIZE {
+      self.node_pool.push(node);
+    }
   }
 
   #[inline]

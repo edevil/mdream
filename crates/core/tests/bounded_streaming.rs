@@ -94,12 +94,12 @@ fn open_constructs_obey_capacity_boundaries() {
 #[test]
 fn terminal_error_is_sticky_and_emits_nothing_later() {
   let mut processor =
-    BoundedMarkdownStreamProcessor::new(HTMLToMarkdownOptions::default(), limits(4)).unwrap();
+    BoundedMarkdownStreamProcessor::new(HTMLToMarkdownOptions::default(), limits(512)).unwrap();
   let prior = processor.process_chunk("<p>ok</p>").unwrap();
   assert_eq!(prior, "ok");
 
   let first = processor
-    .process_chunk("<a href=\"/x\">too much")
+    .process_chunk(&format!("<a href=\"/x\">{}", "x".repeat(1024)))
     .unwrap_err();
   assert_eq!(first, StreamingError::BufferLimitExceeded);
   assert_eq!(processor.buffered_capacity(), 0);
@@ -332,4 +332,94 @@ fn bounded_output_matches_legacy_for_formats_and_chunking() {
       }
     }
   }
+}
+
+#[test]
+fn attributes_and_tables_enforce_parser_cardinality_limits() {
+  fn assert_parser_limit(html: &str) {
+    let mut processor =
+      BoundedMarkdownStreamProcessor::new(HTMLToMarkdownOptions::default(), limits(1024 * 1024))
+        .unwrap();
+    assert_eq!(
+      processor.process_chunk(html).unwrap_err(),
+      StreamingError::ParserLimitExceeded
+    );
+    assert_eq!(
+      processor.finish().unwrap_err(),
+      StreamingError::ParserLimitExceeded
+    );
+    assert_eq!(processor.buffered_capacity(), 0);
+  }
+
+  let attributes = (0..256)
+    .map(|index| format!("a{index}=x"))
+    .collect::<Vec<_>>()
+    .join(" ");
+  let mut at_limit =
+    BoundedMarkdownStreamProcessor::new(HTMLToMarkdownOptions::default(), limits(1024 * 1024))
+      .unwrap();
+  drop(
+    at_limit
+      .process_chunk(&format!("<a {attributes}>x</a>"))
+      .unwrap(),
+  );
+  drop(at_limit.finish().unwrap());
+
+  let cells = "<td>x</td>".repeat(256);
+  let mut at_limit =
+    BoundedMarkdownStreamProcessor::new(HTMLToMarkdownOptions::default(), limits(1024 * 1024))
+      .unwrap();
+  drop(
+    at_limit
+      .process_chunk(&format!("<table><tr>{cells}</tr></table>"))
+      .unwrap(),
+  );
+  drop(at_limit.finish().unwrap());
+
+  assert_parser_limit(&format!(r#"<a href="{}">x</a>"#, "x".repeat(64 * 1024)));
+
+  let attributes = (0..257)
+    .map(|index| format!("a{index}=x"))
+    .collect::<Vec<_>>()
+    .join(" ");
+  assert_parser_limit(&format!("<a {attributes}>x</a>"));
+
+  let cells = "<td>x</td>".repeat(257);
+  assert_parser_limit(&format!("<table><tr>{cells}</tr></table>"));
+}
+
+#[test]
+fn parser_owned_attributes_are_charged_and_released() {
+  let value = "x".repeat(8192);
+  let mut processor =
+    BoundedMarkdownStreamProcessor::new(HTMLToMarkdownOptions::default(), limits(64 * 1024))
+      .unwrap();
+
+  assert_eq!(
+    processor
+      .process_chunk(&format!(r#"<a title="{value}">"#))
+      .unwrap(),
+    ""
+  );
+  assert!(processor.buffered_capacity() >= value.len());
+  drop(processor.process_chunk("x</a>").unwrap());
+  assert!(processor.buffered_capacity() < 512);
+}
+
+#[test]
+fn depth_overflow_summary_obeys_the_capacity_limit() {
+  const LIMIT: usize = 256 * 1024;
+  let mut processor =
+    BoundedMarkdownStreamProcessor::new(HTMLToMarkdownOptions::default(), limits(LIMIT)).unwrap();
+  for _ in 0..512 {
+    assert_eq!(processor.process_chunk("<div>").unwrap(), "");
+  }
+  assert!(processor.buffered_capacity() < LIMIT);
+
+  let oversized_name = format!("<x{}>", "x".repeat(LIMIT));
+  assert_eq!(
+    processor.process_chunk(&oversized_name).unwrap_err(),
+    StreamingError::BufferLimitExceeded
+  );
+  assert_eq!(processor.buffered_capacity(), 0);
 }

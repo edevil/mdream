@@ -501,6 +501,7 @@ impl ConvertState {
     let is_inline: bool;
     let node_spacing: Option<[u8; 2]>;
     let mut output: Option<Cow<'static, str>>;
+    let mut table_alignment = None;
     // True when `output` is a user-supplied override enter string — emit it
     // verbatim without synthesizing a separating space (issue #93).
     let enter_is_literal: bool;
@@ -532,7 +533,11 @@ impl ConvertState {
           if self.depth_map[TAG_TABLE as usize] <= 1 {
             self.table_rendered_table = false;
           }
-          self.table_column_alignments.clear();
+          if self.table_column_alignments.capacity() > MAX_POOLED_TABLE_COLUMNS {
+            self.table_column_alignments = Vec::new();
+          } else {
+            self.table_column_alignments.clear();
+          }
         } else if tag_id == Some(TAG_TR) {
           self.table_current_row_cells = 0;
         } else if tag_id == Some(TAG_TH) {
@@ -545,7 +550,7 @@ impl ConvertState {
             }
           });
           if align_val != 0 || self.table_column_alignments.len() <= self.table_current_row_cells {
-            self.table_column_alignments.push(align_val);
+            table_alignment = Some(align_val);
           }
         }
       }
@@ -565,6 +570,12 @@ impl ConvertState {
       };
     }
     // Phase 1 ends — self.stack borrow released
+    if let Some(alignment) = table_alignment
+      && !self.push_table_alignment(alignment)
+      && self.streaming_error.is_some()
+    {
+      return;
+    }
 
     // Phase 2: calculate new lines + write buffer
     let new_line_config = self.calculate_new_line_config(tag_id, node_spacing);
@@ -738,6 +749,14 @@ impl ConvertState {
     let tag_id = node.tag_id;
     let closes_own_pre_fence = tag_id == Some(TAG_PRE) && self.pre_own_fence;
 
+    if (tag_id == Some(TAG_TH) || tag_id == Some(TAG_TD))
+      && self.depth_map[TAG_TABLE as usize] <= 1
+      && !self.increment_table_cells()
+      && self.streaming_error.is_some()
+    {
+      return;
+    }
+
     // Check override
     let override_config = if self.has_tag_overrides {
       self
@@ -753,12 +772,6 @@ impl ConvertState {
     let is_inline = override_config
       .and_then(|ov| ov.is_inline)
       .unwrap_or(node.is_inline);
-
-    // Table cell count (exit)
-    if (tag_id == Some(TAG_TH) || tag_id == Some(TAG_TD)) && self.depth_map[TAG_TABLE as usize] <= 1
-    {
-      self.table_current_row_cells += 1;
-    }
 
     let mut output: Option<Cow<'static, str>> = None;
     let mut table_separator: Option<String> = None;
@@ -782,7 +795,8 @@ impl ConvertState {
           self.table_rendered_table = true;
           let col_count = self
             .table_current_row_cells
-            .max(self.table_column_alignments.len());
+            .max(self.table_column_alignments.len())
+            .min(MAX_TABLE_COLUMNS);
           let mut sep = String::with_capacity(col_count * 7 + 5);
           sep.push_str(" |\n|");
           for i in 0..col_count {

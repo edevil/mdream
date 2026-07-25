@@ -4,6 +4,9 @@ use crate::consts::*;
 use crate::entities::decode_html_attribute_entities;
 use crate::types::Attributes;
 
+pub(crate) const MAX_ATTRIBUTE_BYTES: usize = 64 * 1024;
+pub(crate) const MAX_ATTRIBUTES_PER_ELEMENT: usize = 256;
+
 /// Whitespace check optimized for the hot character loop.
 /// Uses a 33-bit bitmap: space(32), CR(13), LF(10), TAB(9).
 #[inline(always)]
@@ -210,6 +213,11 @@ pub(crate) fn parse_attributes(attr_str: &str) -> Attributes {
   if attr_str.is_empty() {
     return Attributes::new();
   }
+  if attr_str.len() > MAX_ATTRIBUTE_BYTES {
+    let mut result = Attributes::new();
+    result.mark_limit_exceeded();
+    return result;
+  }
   let mut result = Attributes::with_capacity(4);
 
   let bytes = attr_str.as_bytes();
@@ -262,7 +270,7 @@ pub(crate) fn parse_attributes(attr_str: &str) -> Attributes {
           // Single-pass lowercase: the result is owned either way,
           // so the uppercase pre-scan would only add a redundant pass.
           let name = raw.to_ascii_lowercase();
-          result.insert_if_absent(name, String::new());
+          insert_attribute(&mut result, name, String::new());
           state = NAME;
           name_start = i;
         }
@@ -285,7 +293,8 @@ pub(crate) fn parse_attributes(attr_str: &str) -> Attributes {
           // Single-pass lowercase: the result is owned either way,
           // so the uppercase pre-scan would only add a redundant pass.
           let name = raw.to_ascii_lowercase();
-          result.insert_if_absent(
+          insert_attribute(
+            &mut result,
             name,
             decode_html_attribute_entities(&attr_str[value_start..i]).into_owned(),
           );
@@ -298,7 +307,8 @@ pub(crate) fn parse_attributes(attr_str: &str) -> Attributes {
           // Single-pass lowercase: the result is owned either way,
           // so the uppercase pre-scan would only add a redundant pass.
           let name = raw.to_ascii_lowercase();
-          result.insert_if_absent(
+          insert_attribute(
+            &mut result,
             name,
             decode_html_attribute_entities(&attr_str[value_start..i]).into_owned(),
           );
@@ -313,21 +323,33 @@ pub(crate) fn parse_attributes(attr_str: &str) -> Attributes {
   if state == NAME {
     let raw = &attr_str[name_start..];
     let lc = raw.to_ascii_lowercase();
-    result.insert_if_absent(lc, String::new());
+    insert_attribute(&mut result, lc, String::new());
   } else if state == UNQUOTED_VALUE {
     let raw = &attr_str[name_start_saved..name_end_saved];
     let name = raw.to_ascii_lowercase();
-    result.insert_if_absent(
+    insert_attribute(
+      &mut result,
       name,
       decode_html_attribute_entities(&attr_str[value_start..]).into_owned(),
     );
   } else if state == AFTER_NAME || state == BEFORE_VALUE {
     let raw = &attr_str[name_start_saved..name_end_saved];
     let name = raw.to_ascii_lowercase();
-    result.insert_if_absent(name, String::new());
+    insert_attribute(&mut result, name, String::new());
   }
 
   result
+}
+
+fn insert_attribute(result: &mut Attributes, name: String, value: String) {
+  if result.contains_key(&name) {
+    return;
+  }
+  if result.len() >= MAX_ATTRIBUTES_PER_ELEMENT {
+    result.mark_limit_exceeded();
+    return;
+  }
+  result.insert_if_absent(name, value);
 }
 
 #[cfg(test)]
@@ -439,6 +461,32 @@ mod tests {
     assert_eq!(attrs.get("__proto__").map(String::as_str), Some("first"));
     assert_eq!(attrs.get("Ä").map(String::as_str), Some("upper"));
     assert_eq!(attrs.get("ä").map(String::as_str), Some("lower"));
+  }
+
+  #[test]
+  fn attribute_limits_are_reported() {
+    let oversized = parse_attributes(&"x".repeat(MAX_ATTRIBUTE_BYTES + 1));
+    assert!(oversized.limit_exceeded());
+    assert!(oversized.is_empty());
+
+    let input = (0..=MAX_ATTRIBUTES_PER_ELEMENT)
+      .map(|index| format!("a{index}=x"))
+      .collect::<Vec<_>>()
+      .join(" ");
+    let many = parse_attributes(&input);
+    assert!(many.limit_exceeded());
+    assert_eq!(many.len(), MAX_ATTRIBUTES_PER_ELEMENT);
+  }
+
+  #[test]
+  fn duplicate_storm_keeps_the_first_value_without_hitting_the_count_limit() {
+    let input = std::iter::repeat_n("href=duplicate", MAX_ATTRIBUTES_PER_ELEMENT * 8)
+      .collect::<Vec<_>>()
+      .join(" ");
+    let attrs = parse_attributes(&format!("href=first {input}"));
+    assert!(!attrs.limit_exceeded());
+    assert_eq!(attrs.len(), 1);
+    assert_eq!(attrs.get("href").map(String::as_str), Some("first"));
   }
 
   #[test]

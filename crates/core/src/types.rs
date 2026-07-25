@@ -1,25 +1,41 @@
+use std::collections::HashMap;
+
 /// Compact attribute storage using Vec for small-N linear scan.
 /// Most HTML elements have 0-4 attributes; linear scan on Vec beats HashMap hashing.
 #[derive(Debug, Clone, Default)]
 pub struct Attributes {
   inner: Vec<(String, String)>,
+  index: Option<HashMap<String, usize>>,
+  limit_exceeded: bool,
 }
 
 impl Attributes {
   #[inline]
   pub fn new() -> Self {
-    Self { inner: Vec::new() }
+    Self {
+      inner: Vec::new(),
+      index: None,
+      limit_exceeded: false,
+    }
   }
 
   #[inline]
   pub fn with_capacity(cap: usize) -> Self {
     Self {
       inner: Vec::with_capacity(cap),
+      index: None,
+      limit_exceeded: false,
     }
   }
 
   #[inline]
   pub fn get(&self, key: &str) -> Option<&String> {
+    if let Some(index) = &self.index {
+      return index
+        .get(key)
+        .and_then(|&position| self.inner.get(position))
+        .map(|(_, value)| value);
+    }
     for (k, v) in &self.inner {
       if k == key {
         return Some(v);
@@ -30,24 +46,54 @@ impl Attributes {
 
   #[inline]
   pub fn contains_key(&self, key: &str) -> bool {
-    self.inner.iter().any(|(k, _)| k == key)
+    self.index.as_ref().map_or_else(
+      || self.inner.iter().any(|(k, _)| k == key),
+      |index| index.contains_key(key),
+    )
   }
 
   #[inline]
   pub fn insert(&mut self, key: String, value: String) {
-    for (k, v) in &mut self.inner {
-      if *k == key {
-        *v = value;
-        return;
-      }
+    let existing = self.index.as_ref().map_or_else(
+      || {
+        self
+          .inner
+          .iter()
+          .position(|(candidate, _)| *candidate == key)
+      },
+      |index| index.get(&key).copied(),
+    );
+    if let Some(position) = existing {
+      self.inner[position].1 = value;
+      return;
     }
+    let position = self.inner.len();
     self.inner.push((key, value));
+    self.index_insert(position);
   }
 
   #[inline]
   pub(crate) fn insert_if_absent(&mut self, key: String, value: String) {
     if !self.contains_key(&key) {
+      let position = self.inner.len();
       self.inner.push((key, value));
+      self.index_insert(position);
+    }
+  }
+
+  fn index_insert(&mut self, position: usize) {
+    const INDEX_THRESHOLD: usize = 8;
+    if let Some(index) = &mut self.index {
+      index.insert(self.inner[position].0.clone(), position);
+    } else if self.inner.len() == INDEX_THRESHOLD {
+      self.index = Some(
+        self
+          .inner
+          .iter()
+          .enumerate()
+          .map(|(position, (key, _))| (key.clone(), position))
+          .collect(),
+      );
     }
   }
 
@@ -58,12 +104,61 @@ impl Attributes {
 
   #[inline]
   pub fn clear(&mut self) {
-    self.inner.clear();
+    const POOLED_ATTRIBUTE_CAPACITY: usize = 16;
+    if self.inner.capacity() > POOLED_ATTRIBUTE_CAPACITY {
+      self.inner = Vec::new();
+    } else {
+      self.inner.clear();
+    }
+    self.index = None;
+    self.limit_exceeded = false;
   }
 
   #[inline]
   pub fn iter(&self) -> std::slice::Iter<'_, (String, String)> {
     self.inner.iter()
+  }
+
+  pub(crate) fn len(&self) -> usize {
+    self.inner.len()
+  }
+
+  pub(crate) fn mark_limit_exceeded(&mut self) {
+    self.limit_exceeded = true;
+  }
+
+  pub(crate) fn limit_exceeded(&self) -> bool {
+    self.limit_exceeded
+  }
+
+  pub(crate) fn retained_bytes(&self) -> usize {
+    let strings = self
+      .inner
+      .iter()
+      .map(|(key, value)| key.len() + value.len())
+      .sum::<usize>();
+    let entries = self.inner.len() * std::mem::size_of::<(String, String)>();
+    let index = self.index.as_ref().map_or(0, |index| {
+      index.len() * std::mem::size_of::<(String, usize)>()
+        + index.keys().map(String::len).sum::<usize>()
+    });
+    strings + entries + index
+  }
+
+  pub(crate) fn retained_capacity(&self) -> usize {
+    let strings = self
+      .inner
+      .iter()
+      .map(|(key, value)| key.capacity() + value.capacity())
+      .sum::<usize>();
+    let entries = self.inner.capacity() * std::mem::size_of::<(String, String)>();
+    let index = self.index.as_ref().map_or(0, |index| {
+      // HashMap's bucket/control allocation is private. Charging two full
+      // entries per reported slot conservatively covers both.
+      index.capacity() * 2 * std::mem::size_of::<(String, usize)>()
+        + index.keys().map(String::capacity).sum::<usize>()
+    });
+    strings + entries + index
   }
 }
 
@@ -615,10 +710,10 @@ pub enum OutputFormat {
 
 /// Retained-buffer ceiling for [`crate::BoundedMarkdownStreamProcessor`].
 ///
-/// This limits retained input carry, Markdown output, parser text scratch, and
-/// strings needed by open streaming constructs. It is not an aggregate-memory
-/// limit: attributes, tables, plugins, node pools, returned output, and
-/// transient conversion allocations are outside this M1 contract.
+/// This limits retained input carry, Markdown output, parser text scratch,
+/// attributes, tables, node pools, and strings needed by open constructs.
+/// Caller-owned options, returned output, and transient conversion allocations
+/// are outside the limit.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct StreamingLimits {
   pub max_buffered_bytes: usize,
@@ -651,6 +746,7 @@ pub enum UnsupportedStreamingOption {
 pub enum StreamingError {
   UnsupportedOption(UnsupportedStreamingOption),
   BufferLimitExceeded,
+  ParserLimitExceeded,
   AllocationFailed,
   CapacityOverflow,
 }
@@ -662,6 +758,7 @@ impl std::fmt::Display for StreamingError {
         write!(f, "unsupported bounded streaming option: {option:?}")
       }
       Self::BufferLimitExceeded => f.write_str("retained streaming buffer limit exceeded"),
+      Self::ParserLimitExceeded => f.write_str("streaming parser cardinality limit exceeded"),
       Self::AllocationFailed => f.write_str("retained streaming buffer allocation failed"),
       Self::CapacityOverflow => f.write_str("retained streaming buffer capacity overflow"),
     }

@@ -1837,6 +1837,33 @@ fn extraction_no_match_returns_none() {
   assert!(result.extracted.is_none());
 }
 
+#[test]
+fn extraction_cardinality_and_value_size_are_bounded() {
+  let result = html_to_markdown_result(
+    &"<p>x</p>".repeat(512),
+    HTMLToMarkdownOptions {
+      plugins: Some(PluginConfig {
+        extraction: Some(ExtractionConfig::new(&["p"])),
+        ..Default::default()
+      }),
+      ..Default::default()
+    },
+  );
+  assert_eq!(result.extracted.unwrap().len(), 256);
+
+  let result = html_to_markdown_result(
+    &format!("<p>{}</p>", "x".repeat(64 * 1024 + 1)),
+    HTMLToMarkdownOptions {
+      plugins: Some(PluginConfig {
+        extraction: Some(ExtractionConfig::new(&["p"])),
+        ..Default::default()
+      }),
+      ..Default::default()
+    },
+  );
+  assert!(result.extracted.is_none());
+}
+
 // ── Filter with pre-parsed selectors ──
 
 #[test]
@@ -2912,6 +2939,39 @@ fn frontmatter_accessor_drops_reserved_additional_fields() {
   assert_eq!(fm.iter().filter(|(k, _)| k == "title").count(), 1);
   assert!(fm.iter().any(|(k, v)| k == "title" && v == "Real Title"));
   assert!(fm.iter().any(|(k, v)| k == "custom" && v == "kept"));
+}
+
+#[test]
+fn frontmatter_cardinality_and_value_size_are_bounded() {
+  let additional_fields = (0..128)
+    .map(|index| (format!("field-{index}"), "value".to_string()))
+    .collect();
+  let result = html_to_markdown_result(
+    "<head></head><p>x</p>",
+    HTMLToMarkdownOptions {
+      plugins: Some(PluginConfig {
+        frontmatter: Some(FrontmatterConfig {
+          additional_fields: Some(additional_fields),
+          meta_fields: None,
+        }),
+        ..Default::default()
+      }),
+      ..Default::default()
+    },
+  );
+  assert_eq!(result.frontmatter.unwrap().len(), 64);
+
+  let result = html_to_markdown_result(
+    &format!(
+      "<head><title>{}</title></head><p>x</p>",
+      "x".repeat(64 * 1024 + 1)
+    ),
+    HTMLToMarkdownOptions {
+      plugins: Some(PluginConfig::frontmatter()),
+      ..Default::default()
+    },
+  );
+  assert!(result.frontmatter.unwrap().is_empty());
 }
 
 #[test]

@@ -28,7 +28,20 @@ pub(crate) struct TrackedExtraction {
   pub(crate) text_content: String,
   pub(crate) tag_name: String,
   pub(crate) attributes: Vec<(String, String)>,
+  pub(crate) limit_exceeded: bool,
 }
+
+const MAX_TABLE_COLUMNS: usize = 256;
+const MAX_POOLED_TABLE_COLUMNS: usize = 64;
+const MAX_NODE_POOL_SIZE: usize = 64;
+const MAX_EXTRACTION_SELECTORS: usize = 64;
+const MAX_ACTIVE_EXTRACTIONS: usize = 64;
+const MAX_EXTRACTION_RESULTS: usize = 256;
+const MAX_EXTRACTION_RESULT_BYTES: usize = 64 * 1024;
+const MAX_EXTRACTION_BYTES: usize = 256 * 1024;
+const MAX_FRONTMATTER_FIELDS: usize = 64;
+const MAX_FRONTMATTER_VALUE_BYTES: usize = 64 * 1024;
+const MAX_FRONTMATTER_BYTES: usize = 256 * 1024;
 
 #[inline(always)]
 fn is_inline_gfm_hazard(byte: u8) -> bool {
@@ -124,6 +137,89 @@ pub(crate) fn reserve_accounted(
 
 fn vector_capacity_bytes<T>(value: &Vec<T>) -> usize {
   value.capacity().saturating_mul(std::mem::size_of::<T>())
+}
+
+fn string_pair_bytes(values: &[(String, String)], allocated_slots: usize, capacity: bool) -> usize {
+  values
+    .iter()
+    .map(|(key, value)| {
+      if capacity {
+        key.capacity() + value.capacity()
+      } else {
+        key.len() + value.len()
+      }
+    })
+    .sum::<usize>()
+    + if capacity {
+      allocated_slots * std::mem::size_of::<(String, String)>()
+    } else {
+      std::mem::size_of_val(values)
+    }
+}
+
+fn element_dynamic_bytes(node: &ElementNode, capacity: bool) -> usize {
+  let attributes = if capacity {
+    node.attributes.retained_capacity()
+  } else {
+    node.attributes.retained_bytes()
+  };
+  let custom_name = node.custom_name.as_ref().map_or(0, |name| {
+    if capacity {
+      name.capacity()
+    } else {
+      name.len()
+    }
+  });
+  let tailwind = node.tailwind.as_ref().map_or(0, |data| {
+    std::mem::size_of::<TailwindData>()
+      + data.prefix.as_ref().map_or(0, |value| {
+        if capacity {
+          value.capacity()
+        } else {
+          value.len()
+        }
+      })
+      + data.suffix.as_ref().map_or(0, |value| {
+        if capacity {
+          value.capacity()
+        } else {
+          value.len()
+        }
+      })
+  });
+  attributes + custom_name + tailwind
+}
+
+fn extracted_element_bytes(element: &ExtractedElement, capacity: bool) -> usize {
+  let string_bytes = |value: &String| {
+    if capacity {
+      value.capacity()
+    } else {
+      value.len()
+    }
+  };
+  string_bytes(&element.selector)
+    + string_bytes(&element.tag_name)
+    + string_bytes(&element.text_content)
+    + string_pair_bytes(&element.attributes, element.attributes.capacity(), capacity)
+}
+
+fn tracked_extraction_bytes(extraction: &TrackedExtraction, capacity: bool) -> usize {
+  let string_bytes = |value: &String| {
+    if capacity {
+      value.capacity()
+    } else {
+      value.len()
+    }
+  };
+  string_bytes(&extraction.selector)
+    + string_bytes(&extraction.tag_name)
+    + string_bytes(&extraction.text_content)
+    + string_pair_bytes(
+      &extraction.attributes,
+      extraction.attributes.capacity(),
+      capacity,
+    )
 }
 
 fn reserve_vec_accounted_with<T, F>(
@@ -631,7 +727,7 @@ impl ConvertState {
       .is_some_and(|context| context.svg_integration_point)
   }
 
-  pub(crate) fn push_tokenizer_context(&mut self, tag_name: &str, tag_id: Option<u8>) {
+  pub(crate) fn push_tokenizer_context(&mut self, tag_name: &str, tag_id: Option<u8>) -> bool {
     let parent_in_svg = self.in_supported_svg_content();
     let svg_integration_point = parent_in_svg
       && (tag_name.eq_ignore_ascii_case("foreignobject")
@@ -639,11 +735,15 @@ impl ConvertState {
         || tag_name.eq_ignore_ascii_case("title"));
     let in_supported_svg = tag_id == Some(TAG_SVG) || (parent_in_svg && !svg_integration_point);
     let text_mode = self.text_mode_for_tag(tag_name, tag_id);
+    if !self.reserve_tokenizer_context() {
+      return false;
+    }
     self.tokenizer_contexts.push(TokenizerContext {
       text_mode,
       in_supported_svg,
       svg_integration_point,
     });
+    true
   }
 
   pub(crate) fn pop_tokenizer_context(&mut self) {
@@ -695,12 +795,28 @@ impl ConvertState {
       collapse_non_span_depth: 0,
       collapse_span_depth: 0,
       first_block_parent_index: None,
-      block_parent_indices: Vec::with_capacity(16),
+      block_parent_indices: if streaming_limit.is_some() {
+        Vec::new()
+      } else {
+        Vec::with_capacity(16)
+      },
       parse_text_buffer: String::new(),
       script_text_buffer: String::new(),
-      stack: Vec::with_capacity(32),
-      tokenizer_contexts: Vec::with_capacity(32),
-      node_pool: Vec::with_capacity(32),
+      stack: if streaming_limit.is_some() {
+        Vec::new()
+      } else {
+        Vec::with_capacity(32)
+      },
+      tokenizer_contexts: if streaming_limit.is_some() {
+        Vec::new()
+      } else {
+        Vec::with_capacity(32)
+      },
+      node_pool: if streaming_limit.is_some() {
+        Vec::new()
+      } else {
+        Vec::with_capacity(32)
+      },
 
       has_plugins: false,
       has_tailwind: false,
@@ -827,6 +943,8 @@ impl ConvertState {
         s.extraction_parsed_selectors = extraction
           .selectors
           .iter()
+          .filter(|selector| selector.len() <= MAX_EXTRACTION_RESULT_BYTES)
+          .take(MAX_EXTRACTION_SELECTORS)
           .map(|sel| (sel.clone(), parse_css_selector(sel)))
           .collect();
       }
@@ -891,6 +1009,37 @@ impl ConvertState {
       + self.code_spans.len() * std::mem::size_of::<CodeSpanState>()
       + self.blockquotes.len() * std::mem::size_of::<BlockquoteFrame>()
       + self.list_indent_widths.len() * std::mem::size_of::<u8>()
+      + self.stack.len() * std::mem::size_of::<ElementNode>()
+      + self
+        .stack
+        .iter()
+        .map(|node| element_dynamic_bytes(node, false))
+        .sum::<usize>()
+      + self.tokenizer_contexts.len() * std::mem::size_of::<TokenizerContext>()
+      + self.block_parent_indices.len() * std::mem::size_of::<usize>()
+      + self.node_pool.len() * std::mem::size_of::<ElementNode>()
+      + self
+        .node_pool
+        .iter()
+        .map(|node| element_dynamic_bytes(node, false))
+        .sum::<usize>()
+      + self.table_column_alignments.len() * std::mem::size_of::<u8>()
+      + self.frontmatter_title.as_ref().map_or(0, String::len)
+      + string_pair_bytes(
+        &self.frontmatter_meta,
+        self.frontmatter_meta.capacity(),
+        false,
+      )
+      + self
+        .extraction_tracked
+        .iter()
+        .map(|tracked| tracked_extraction_bytes(tracked, false))
+        .sum::<usize>()
+      + self
+        .extraction_results
+        .iter()
+        .map(|result| extracted_element_bytes(result, false))
+        .sum::<usize>()
   }
 
   pub(crate) fn retained_buffer_capacity(&self) -> usize {
@@ -919,6 +1068,180 @@ impl ConvertState {
       + vector_capacity_bytes(&self.code_spans)
       + vector_capacity_bytes(&self.blockquotes)
       + vector_capacity_bytes(&self.list_indent_widths)
+      + vector_capacity_bytes(&self.stack)
+      + self
+        .stack
+        .iter()
+        .map(|node| element_dynamic_bytes(node, true))
+        .sum::<usize>()
+      + vector_capacity_bytes(&self.tokenizer_contexts)
+      + vector_capacity_bytes(&self.block_parent_indices)
+      + vector_capacity_bytes(&self.node_pool)
+      + self
+        .node_pool
+        .iter()
+        .map(|node| element_dynamic_bytes(node, true))
+        .sum::<usize>()
+      + vector_capacity_bytes(&self.table_column_alignments)
+      + self.frontmatter_title.as_ref().map_or(0, String::capacity)
+      + string_pair_bytes(
+        &self.frontmatter_meta,
+        self.frontmatter_meta.capacity(),
+        true,
+      )
+      + vector_capacity_bytes(&self.extraction_tracked)
+      + self
+        .extraction_tracked
+        .iter()
+        .map(|tracked| tracked_extraction_bytes(tracked, true))
+        .sum::<usize>()
+      + vector_capacity_bytes(&self.extraction_results)
+      + self
+        .extraction_results
+        .iter()
+        .map(|result| extracted_element_bytes(result, true))
+        .sum::<usize>()
+  }
+
+  pub(crate) fn extraction_retained_capacity(&self) -> usize {
+    vector_capacity_bytes(&self.extraction_tracked)
+      + self
+        .extraction_tracked
+        .iter()
+        .map(|tracked| tracked_extraction_bytes(tracked, true))
+        .sum::<usize>()
+      + vector_capacity_bytes(&self.extraction_results)
+      + self
+        .extraction_results
+        .iter()
+        .map(|result| extracted_element_bytes(result, true))
+        .sum::<usize>()
+  }
+
+  pub(crate) fn push_tracked_extraction(&mut self, tracked: TrackedExtraction) {
+    if self.extraction_tracked.len() >= MAX_ACTIVE_EXTRACTIONS
+      || self.extraction_tracked.len() + self.extraction_results.len() >= MAX_EXTRACTION_RESULTS
+    {
+      return;
+    }
+    if tracked_extraction_bytes(&tracked, true) > MAX_EXTRACTION_RESULT_BYTES {
+      return;
+    }
+    let retained = self
+      .extraction_retained_capacity()
+      .saturating_add(tracked_extraction_bytes(&tracked, true));
+    let required = self.extraction_tracked.len() + 1;
+    if reserve_vec_accounted(
+      &mut self.extraction_tracked,
+      required,
+      retained,
+      MAX_EXTRACTION_BYTES,
+    )
+    .is_ok()
+    {
+      self.extraction_tracked.push(tracked);
+    }
+  }
+
+  pub(crate) fn push_extraction_result(&mut self, result: ExtractedElement) {
+    if self.extraction_results.len() >= MAX_EXTRACTION_RESULTS {
+      return;
+    }
+    let retained = self
+      .extraction_retained_capacity()
+      .saturating_add(extracted_element_bytes(&result, true));
+    let required = self.extraction_results.len() + 1;
+    if reserve_vec_accounted(
+      &mut self.extraction_results,
+      required,
+      retained,
+      MAX_EXTRACTION_BYTES,
+    )
+    .is_ok()
+    {
+      self.extraction_results.push(result);
+    }
+  }
+
+  pub(crate) fn frontmatter_retained_capacity(&self) -> usize {
+    self.frontmatter_title.as_ref().map_or(0, String::capacity)
+      + string_pair_bytes(
+        &self.frontmatter_meta,
+        self.frontmatter_meta.capacity(),
+        true,
+      )
+  }
+
+  pub(crate) fn capture_frontmatter_title(&mut self, value: &str) {
+    let value = value.trim();
+    if value.is_empty() || value.len() > MAX_FRONTMATTER_VALUE_BYTES {
+      return;
+    }
+    let retained = self.frontmatter_retained_capacity();
+    let mut copy = String::new();
+    if reserve_accounted(&mut copy, value.len(), retained, MAX_FRONTMATTER_BYTES).is_ok() {
+      copy.push_str(value);
+      self.frontmatter_title = Some(copy);
+    }
+  }
+
+  pub(crate) fn capture_frontmatter_meta(&mut self, key: &str, value: &str) {
+    if key.len() > MAX_FRONTMATTER_VALUE_BYTES || value.len() > MAX_FRONTMATTER_VALUE_BYTES {
+      return;
+    }
+    if let Some(index) = self
+      .frontmatter_meta
+      .iter()
+      .position(|(existing, _)| existing == key)
+    {
+      let retained = self.frontmatter_retained_capacity();
+      let mut copy = String::new();
+      if reserve_accounted(&mut copy, value.len(), retained, MAX_FRONTMATTER_BYTES).is_ok() {
+        copy.push_str(value);
+        self.frontmatter_meta[index].1 = copy;
+      }
+      return;
+    }
+    if self.frontmatter_meta.len() >= MAX_FRONTMATTER_FIELDS {
+      return;
+    }
+
+    let retained = self.frontmatter_retained_capacity();
+    let mut key_copy = String::new();
+    if reserve_accounted(&mut key_copy, key.len(), retained, MAX_FRONTMATTER_BYTES).is_err() {
+      return;
+    }
+    key_copy.push_str(key);
+    let retained = self
+      .frontmatter_retained_capacity()
+      .saturating_add(key_copy.capacity());
+    let mut value_copy = String::new();
+    if reserve_accounted(
+      &mut value_copy,
+      value.len(),
+      retained,
+      MAX_FRONTMATTER_BYTES,
+    )
+    .is_err()
+    {
+      return;
+    }
+    value_copy.push_str(value);
+    let retained = self
+      .frontmatter_retained_capacity()
+      .saturating_add(key_copy.capacity())
+      .saturating_add(value_copy.capacity());
+    let required = self.frontmatter_meta.len() + 1;
+    if reserve_vec_accounted(
+      &mut self.frontmatter_meta,
+      required,
+      retained,
+      MAX_FRONTMATTER_BYTES,
+    )
+    .is_ok()
+    {
+      self.frontmatter_meta.push((key_copy, value_copy));
+    }
   }
 
   fn fail_streaming(&mut self, error: StreamingError) {
@@ -939,6 +1262,110 @@ impl ConvertState {
     self.code_spans = Vec::new();
     self.blockquotes = Vec::new();
     self.list_indent_widths = Vec::new();
+    self.stack = Vec::new();
+    self.tokenizer_contexts = Vec::new();
+    self.block_parent_indices = Vec::new();
+    self.node_pool = Vec::new();
+    self.table_column_alignments = Vec::new();
+    self.frontmatter_title = None;
+    self.frontmatter_meta = Vec::new();
+    self.extraction_tracked = Vec::new();
+    self.extraction_results = Vec::new();
+  }
+
+  fn reserve_tokenizer_context(&mut self) -> bool {
+    let Some(limit) = self.streaming_limit else {
+      return true;
+    };
+    let retained = self.retained_buffer_capacity();
+    let Some(required) = self.tokenizer_contexts.len().checked_add(1) else {
+      self.fail_streaming(StreamingError::CapacityOverflow);
+      return false;
+    };
+    if let Err(error) =
+      reserve_vec_accounted(&mut self.tokenizer_contexts, required, retained, limit)
+    {
+      self.fail_streaming(error);
+      return false;
+    }
+    true
+  }
+
+  pub(crate) fn reserve_stack_node(&mut self, node: &ElementNode) -> bool {
+    let Some(limit) = self.streaming_limit else {
+      return true;
+    };
+    let retained = self.retained_buffer_capacity();
+    let Some(required) = self.stack.len().checked_add(1) else {
+      self.fail_streaming(StreamingError::CapacityOverflow);
+      return false;
+    };
+    if let Err(error) = reserve_vec_accounted(&mut self.stack, required, retained, limit) {
+      self.fail_streaming(error);
+      return false;
+    }
+    let Some(total) = self
+      .retained_buffer_capacity()
+      .checked_add(element_dynamic_bytes(node, true))
+    else {
+      self.fail_streaming(StreamingError::CapacityOverflow);
+      return false;
+    };
+    if total > limit {
+      self.fail_streaming(StreamingError::BufferLimitExceeded);
+      return false;
+    }
+    true
+  }
+
+  pub(crate) fn reserve_block_parent(&mut self) -> bool {
+    let Some(limit) = self.streaming_limit else {
+      return true;
+    };
+    let retained = self.retained_buffer_capacity();
+    let Some(required) = self.block_parent_indices.len().checked_add(1) else {
+      self.fail_streaming(StreamingError::CapacityOverflow);
+      return false;
+    };
+    if let Err(error) =
+      reserve_vec_accounted(&mut self.block_parent_indices, required, retained, limit)
+    {
+      self.fail_streaming(error);
+      return false;
+    }
+    true
+  }
+
+  pub(crate) fn push_table_alignment(&mut self, alignment: u8) -> bool {
+    if self.table_column_alignments.len() >= MAX_TABLE_COLUMNS {
+      if self.streaming_limit.is_some() {
+        self.fail_streaming(StreamingError::ParserLimitExceeded);
+      }
+      return false;
+    }
+    if let Some(limit) = self.streaming_limit {
+      let retained = self.retained_buffer_capacity();
+      let required = self.table_column_alignments.len() + 1;
+      if let Err(error) =
+        reserve_vec_accounted(&mut self.table_column_alignments, required, retained, limit)
+      {
+        self.fail_streaming(error);
+        return false;
+      }
+    }
+    self.table_column_alignments.push(alignment);
+    true
+  }
+
+  pub(crate) fn increment_table_cells(&mut self) -> bool {
+    if self.table_current_row_cells >= MAX_TABLE_COLUMNS {
+      if self.streaming_limit.is_some() {
+        self.fail_streaming(StreamingError::ParserLimitExceeded);
+      }
+      return false;
+    }
+    self.table_current_row_cells += 1;
+    true
   }
 
   fn reserve_retained(
@@ -1118,6 +1545,14 @@ impl ConvertState {
     }
     if self.list_indent_widths.is_empty() {
       self.list_indent_widths = Vec::new();
+    }
+    if self.stack.is_empty() {
+      self.stack = Vec::new();
+      self.tokenizer_contexts = Vec::new();
+      self.block_parent_indices = Vec::new();
+    }
+    if self.depth_map[TAG_TABLE as usize] == 0 {
+      self.table_column_alignments = Vec::new();
     }
     if self.depth_map[TAG_A as usize] > 0
       || !self.open_markers.is_empty()
@@ -2163,7 +2598,7 @@ impl ConvertState {
     if self.disable_drain {
       return;
     }
-    if self.clean_flags & CLEAN_FRAGMENTS != 0 || self.has_frontmatter || self.has_extraction {
+    if self.clean_flags & CLEAN_FRAGMENTS != 0 {
       return;
     }
     // Keep the tail a late rewrite may still touch, and never drop the `[` of an
