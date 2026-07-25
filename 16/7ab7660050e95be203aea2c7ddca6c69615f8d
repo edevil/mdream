@@ -1,0 +1,31 @@
+crates/core/src/convert/mod.rs
+  s_4d4c54b2ba8f31::t_69e7918cc33b42 1217-1219,1236-1238,1246
+package.json
+  s_88b31c4ca4d792::t_ab5a3713791bb9 49-50
+packages/js/test/unit/template.test.ts
+  s_4d4c54b2ba8f31::t_c91bdb1815c4a5 103
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "167ab7660050e95be203aea2c7ddca6c69615f8d",
+  "prompts": {},
+  "sessions": {
+    "s_4d4c54b2ba8f31": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_06570136fffejL1DhpbVN4NROl",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "André Cruz <acruz@cloudflare.com>"
+    },
+    "s_88b31c4ca4d792": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_065701452ffewnRbH6YipobQCs",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "André Cruz <acruz@cloudflare.com>"
+    }
+  }
+}
