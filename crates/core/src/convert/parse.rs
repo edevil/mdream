@@ -2,9 +2,8 @@
 
 use super::*;
 
-// Firefox and Chromium flatten DOM trees beyond this practical depth. Stop
-// conversion at the same boundary instead of growing the parser stack without
-// limit. Output produced before the boundary remains available to the caller.
+// Firefox and Chromium flatten DOM trees beyond this practical depth. Nodes
+// beyond this boundary are represented by a fixed-size overflow summary.
 const MAX_ELEMENT_DEPTH: usize = 512;
 
 /// Tags valid inside `<head>` per the HTML parser's "in head" insertion mode.
@@ -235,6 +234,134 @@ fn is_hidden(node: &ElementNode) -> bool {
 }
 
 impl ConvertState {
+  fn record_overflow_start(
+    &mut self,
+    tag_name: &str,
+    tag_id: Option<u8>,
+    tag_handler: Option<&TagHandler>,
+  ) {
+    if let Some(overflow) = &mut self.overflow {
+      if overflow.root_name == tag_name {
+        overflow.root_depth = overflow.root_depth.saturating_add(1);
+      }
+      if overflow.suppressed_name.as_deref() == Some(tag_name) {
+        overflow.suppressed_depth = overflow.suppressed_depth.saturating_add(1);
+      }
+    } else {
+      self.overflow = Some(OverflowState {
+        root_name: tag_name.to_string(),
+        root_depth: 1,
+        suppressed_name: None,
+        suppressed_depth: 0,
+        raw_name: None,
+        raw_mode: TextMode::Data,
+        raw_is_script: false,
+      });
+    }
+
+    let Some(handler) = tag_handler else { return };
+    let raw_mode = self.text_mode_for_tag(tag_name, tag_id);
+    let overflow = self.overflow.as_mut().expect("overflow was initialized");
+    let suppresses_subtree = matches!(
+      tag_id,
+      Some(
+        TAG_SCRIPT
+          | TAG_STYLE
+          | TAG_TEMPLATE
+          | TAG_IFRAME
+          | TAG_NOFRAMES
+          | TAG_NOEMBED
+          | TAG_NOSCRIPT
+          | TAG_DATALIST
+      )
+    );
+    if suppresses_subtree && overflow.suppressed_name.is_none() {
+      overflow.suppressed_name = Some(tag_name.to_string());
+      overflow.suppressed_depth = 1;
+    }
+    if handler.is_non_nesting {
+      overflow.raw_name = Some(tag_name.to_string());
+      overflow.raw_mode = raw_mode;
+      overflow.raw_is_script = tag_id == Some(TAG_SCRIPT) && tag_name == "script";
+      self.script_data_state = SCRIPT_DATA;
+    }
+  }
+
+  pub(crate) fn process_overflow_closing_tag(
+    &mut self,
+    html_chunk: &str,
+    position: usize,
+  ) -> CloseTagResult {
+    let bytes = html_chunk.as_bytes();
+    let mut i = position + 2;
+    let name_start = i;
+    let mut name_end = bytes.len();
+    let mut quote = 0;
+    let mut complete = false;
+    while i < bytes.len() {
+      let c = bytes[i];
+      if name_end == bytes.len() && (is_whitespace(c) || c == SLASH_CHAR || c == GT_CHAR) {
+        name_end = i;
+      }
+      if quote != 0 {
+        if c == quote {
+          quote = 0;
+        }
+      } else if name_end != bytes.len() && (c == QUOTE_CHAR || c == APOS_CHAR) {
+        quote = c;
+      } else if c == GT_CHAR {
+        complete = true;
+        break;
+      }
+      i += 1;
+    }
+    if !complete {
+      return CloseTagResult {
+        complete: false,
+        new_position: position,
+      };
+    }
+
+    let raw_name = &html_chunk[name_start..name_end];
+    let name: Cow<'_, str> =
+      if let Some(id) = crate::consts::get_tag_id_ci_bytes(raw_name.as_bytes()) {
+        Cow::Borrowed(TAG_NAMES[id as usize])
+      } else if raw_name.bytes().any(|b| b.is_ascii_uppercase()) {
+        Cow::Owned(raw_name.to_ascii_lowercase())
+      } else {
+        Cow::Borrowed(raw_name)
+      };
+
+    let mut leave_overflow = false;
+    if let Some(overflow) = &mut self.overflow {
+      if overflow.raw_name.as_deref() == Some(name.as_ref()) {
+        overflow.raw_name = None;
+        overflow.raw_mode = TextMode::Data;
+        overflow.raw_is_script = false;
+        self.script_data_state = SCRIPT_DATA;
+      }
+      if overflow.suppressed_name.as_deref() == Some(name.as_ref()) {
+        overflow.suppressed_depth = overflow.suppressed_depth.saturating_sub(1);
+        if overflow.suppressed_depth == 0 {
+          overflow.suppressed_name = None;
+        }
+      }
+      if overflow.root_name == name {
+        overflow.root_depth = overflow.root_depth.saturating_sub(1);
+        leave_overflow = overflow.root_depth == 0;
+      }
+    }
+    if leave_overflow {
+      self.overflow = None;
+      self.script_data_state = SCRIPT_DATA;
+    }
+    self.just_closed_tag = true;
+    CloseTagResult {
+      complete: true,
+      new_position: i + 1,
+    }
+  }
+
   pub(crate) fn process_text_buffer(&mut self, text_buffer: &mut String) {
     let contains_non_whitespace = self.text_buffer_contains_non_whitespace;
     let contains_whitespace = self.text_buffer_contains_whitespace;
@@ -503,6 +630,18 @@ impl ConvertState {
       || aliased_void
       || supported_foreign_self_close;
 
+    if self.overflow.is_some() {
+      if !self_closing {
+        self.record_overflow_start(tag_name, tag_id, tag_handler);
+      }
+      return OpeningTagResult {
+        complete: true,
+        new_position,
+        self_closing,
+        skip: true,
+      };
+    }
+
     // Browser recovery: a non-head start tag while <head> is still open means the
     // page never closed its head (no </head>/<body>). Auto-close head (and anything
     // wrongly opened inside it) so body content parses as flow content with normal
@@ -628,7 +767,7 @@ impl ConvertState {
     }
 
     if !self_closing && self.stack.len() >= MAX_ELEMENT_DEPTH {
-      self.depth_limit_reached = true;
+      self.record_overflow_start(tag_name, tag_id, tag_handler);
       return OpeningTagResult {
         complete: true,
         new_position,
@@ -1348,7 +1487,17 @@ impl ConvertState {
     };
 
     let result = self.process_opening_tag("#cdata-section", tag_id, None, tag_id.is_some(), ">", 0);
-    if !result.complete || result.skip {
+    if !result.complete {
+      return;
+    }
+    if result.skip {
+      if self
+        .overflow
+        .as_ref()
+        .is_some_and(|overflow| overflow.root_name == "#cdata-section")
+      {
+        self.overflow = None;
+      }
       return;
     }
 

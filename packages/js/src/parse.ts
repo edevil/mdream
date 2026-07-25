@@ -18,6 +18,7 @@ import {
   TAG_CENTER,
   TAG_CODE,
   TAG_COL,
+  TAG_DATALIST,
   TAG_DD,
   TAG_DETAILS,
   TAG_DIALOG,
@@ -180,9 +181,8 @@ function isSupportedSvgIntegrationPoint(node: ElementNode | null | undefined): b
     && inSupportedSvgContent(node.parent)
 }
 
-// Firefox and Chromium flatten DOM trees beyond this practical depth. Stop
-// conversion at the same boundary instead of growing the parser's parent chain
-// without limit on pathologically nested input.
+// Firefox and Chromium flatten DOM trees beyond this practical depth. Nodes
+// beyond this boundary are represented by a fixed-size overflow summary.
 const MAX_ELEMENT_DEPTH = 512
 
 // Tags that are valid inside <head>. Per the HTML parser's "in head" insertion
@@ -476,6 +476,7 @@ export function finalizeParse(
   state: ParseState,
   handleEvent: (event: NodeEvent) => void,
 ): void {
+  const overflowSuppressed = state.overflow?.suppressedName !== undefined
   if (state.currentNode && isScriptElement(state.currentNode)) {
     pushScriptTextChunk(state, leftover)
     const scriptText = takeScriptText(state)
@@ -483,8 +484,10 @@ export function finalizeParse(
       processTextBuffer(scriptText, state, handleEvent)
     }
   }
-  else if (leftover.length > 0
+  else if (!overflowSuppressed
+    && leftover.length > 0
     && (leftover.charCodeAt(0) !== LT_CHAR
+      || state.overflow !== undefined
       || (state.currentNode?.tagHandler?.isNonNesting
         && !isSupportedSvgIntegrationPoint(state.currentNode))
       || textModeForNode(state.currentNode) !== TEXT_MODE_DATA
@@ -529,7 +532,7 @@ class ParsedElementNode implements ElementNode {
   readonly tokenizerTextMode: number
   readonly inSupportedSvgContent: boolean
   readonly svgIntegrationPoint: boolean
-  private cachedDepthMap?: Uint8Array
+  private cachedDepthMap?: Uint16Array
 
   constructor(
     name: string,
@@ -554,11 +557,11 @@ class ParsedElementNode implements ElementNode {
     this.tokenizerTextMode = textModeForTag(tagId, this.svgIntegrationPoint)
   }
 
-  get depthMap(): Uint8Array {
+  get depthMap(): Uint16Array {
     if (this.cachedDepthMap)
       return this.cachedDepthMap
 
-    const depthMap = new Uint8Array(MAX_TAG_ID)
+    const depthMap = new Uint16Array(MAX_TAG_ID)
     if (this.tagId >= 0 && this.tagId < MAX_TAG_ID)
       depthMap[this.tagId] = 1
     let node = this.parent
@@ -577,13 +580,25 @@ export interface ParseOptions {
   resolvedPlugins?: TransformPlugin[]
 }
 
+interface OverflowState {
+  // A matching root end tag closes every ignored inner node. Only nested roots
+  // of the same name need a counter to recover at the correct close.
+  rootName: string
+  rootDepth: number
+  suppressedName?: string
+  suppressedDepth: number
+  rawName?: string
+  rawMode: number
+  rawIsScript: boolean
+}
+
 export interface ParseState {
-  /** Map of tag names to their current nesting depth - uses TypedArray for performance */
-  depthMap: Uint8Array
+  /** Map of tag names to their current nesting depth. */
+  depthMap: Uint16Array
   /** Current overall nesting depth */
   depth: number
-  /** Whether parsing stopped after reaching the practical browser depth limit. */
-  depthLimitReached?: boolean
+  /** Bounded summary for nodes beyond the practical browser depth limit. */
+  overflow?: OverflowState
   /** Currently processing element node */
   currentNode?: ElementNode | null
   /** Whether current content contains HTML entities that need decoding */
@@ -625,6 +640,97 @@ export interface ParseState {
 export interface ParseResult {
   events: NodeEvent[]
   remainingHtml: string
+}
+
+function recordOverflowStart(state: ParseState, tagName: string, tagId: number, tagHandler: TagHandler | undefined): void {
+  const overflow = state.overflow ??= {
+    rootName: tagName,
+    rootDepth: 0,
+    suppressedDepth: 0,
+    rawMode: TEXT_MODE_DATA,
+    rawIsScript: false,
+  }
+  if (overflow.rootName === tagName)
+    overflow.rootDepth++
+  if (overflow.suppressedName === tagName)
+    overflow.suppressedDepth++
+
+  const suppressesSubtree = tagId === TAG_SCRIPT
+    || tagId === TAG_STYLE
+    || tagId === TAG_TEMPLATE
+    || tagId === TAG_IFRAME
+    || tagId === TAG_NOFRAMES
+    || tagId === TAG_NOEMBED
+    || tagId === TAG_NOSCRIPT
+    || tagId === TAG_DATALIST
+  if (suppressesSubtree && overflow.suppressedName === undefined) {
+    overflow.suppressedName = tagName
+    overflow.suppressedDepth = 1
+  }
+  if (tagHandler?.isNonNesting) {
+    overflow.rawName = tagName
+    overflow.rawMode = textModeForTag(tagId, isSupportedSvgIntegrationPoint(state.currentNode))
+    overflow.rawIsScript = tagId === TAG_SCRIPT && tagName === 'script'
+    state.scriptDataState = SCRIPT_DATA
+  }
+}
+
+function processOverflowClosingTag(htmlChunk: string, position: number, state: ParseState): {
+  complete: boolean
+  newPosition: number
+  remainingText: string
+} {
+  let i = position + 2
+  const nameStart = i
+  let nameEnd = -1
+  let quoteChar = 0
+  while (i < htmlChunk.length) {
+    const charCode = htmlChunk.charCodeAt(i)
+    if (nameEnd !== -1) {
+      if (quoteChar) {
+        if (charCode === quoteChar)
+          quoteChar = 0
+        i++
+        continue
+      }
+      if (charCode === QUOTE_CHAR || charCode === APOS_CHAR) {
+        quoteChar = charCode
+        i++
+        continue
+      }
+    }
+    if (charCode === GT_CHAR)
+      break
+    if (nameEnd === -1 && (isWhitespace(charCode) || charCode === SLASH_CHAR))
+      nameEnd = i
+    i++
+  }
+  if (i === htmlChunk.length) {
+    return { complete: false, newPosition: position, remainingText: htmlChunk.substring(position) }
+  }
+
+  const name = normalizeTagName(htmlChunk.substring(nameStart, nameEnd === -1 ? i : nameEnd))
+  const overflow = state.overflow!
+  if (overflow.rawName === name) {
+    overflow.rawName = undefined
+    overflow.rawMode = TEXT_MODE_DATA
+    overflow.rawIsScript = false
+    state.scriptDataState = SCRIPT_DATA
+  }
+  if (overflow.suppressedName === name) {
+    overflow.suppressedDepth = Math.max(0, overflow.suppressedDepth - 1)
+    if (overflow.suppressedDepth === 0)
+      overflow.suppressedName = undefined
+  }
+  if (overflow.rootName === name) {
+    overflow.rootDepth = Math.max(0, overflow.rootDepth - 1)
+    if (overflow.rootDepth === 0) {
+      state.overflow = undefined
+      state.scriptDataState = SCRIPT_DATA
+    }
+  }
+  state.justClosedTag = true
+  return { complete: true, newPosition: i + 1, remainingText: '' }
 }
 
 /**
@@ -822,7 +928,7 @@ function matchesClosingTag(node: ElementNode, tagName: string, tagId: number, cl
 export function parseHtml(html: string, options: ParseOptions = {}): ParseResult {
   const events: NodeEvent[] = []
   const state: ParseState = {
-    depthMap: new Uint8Array(MAX_TAG_ID),
+    depthMap: new Uint16Array(MAX_TAG_ID),
     depth: 0,
     resolvedPlugins: options.resolvedPlugins || [],
   }
@@ -855,9 +961,6 @@ function parseHtmlInternal(
   state: ParseState,
   handleEvent: (event: NodeEvent) => void,
 ): string {
-  if (state.depthLimitReached)
-    return ''
-
   let textBuffer = '' // Buffer to accumulate text content
   // Raw start of the run held in textBuffer. Streaming must carry the source
   // bytes from here, since textBuffer may already contain decoded or escaped
@@ -865,7 +968,7 @@ function parseHtmlInternal(
   let runStart = 0
 
   // Initialize state
-  state.depthMap ??= new Uint8Array(MAX_TAG_ID)
+  state.depthMap ??= new Uint16Array(MAX_TAG_ID)
   state.depth ??= 0
   state.lastCharWasWhitespace ??= true
   state.justClosedTag ??= false
@@ -882,13 +985,35 @@ function parseHtmlInternal(
     i = scanResult
   }
 
-  while (i < chunkLength && !state.depthLimitReached) {
+  while (i < chunkLength) {
+    if (state.overflow?.rawIsScript) {
+      const scanResult = findScriptEndTag(htmlChunk, i, state)
+      if (scanResult === SCRIPT_SCAN_COMPLETE) {
+        i = chunkLength
+        continue
+      }
+      if (scanResult <= SCRIPT_SEQUENCE_INCOMPLETE) {
+        runStart = -scanResult - 2
+        textBuffer = htmlChunk.substring(runStart)
+        break
+      }
+      i = scanResult
+    }
+
     const currentCharCode = htmlChunk.charCodeAt(i)
+
+    if (currentCharCode !== LT_CHAR && state.overflow?.suppressedName !== undefined) {
+      while (i < chunkLength && htmlChunk.charCodeAt(i) !== LT_CHAR)
+        i++
+      continue
+    }
 
     // If not starting a tag, add to text buffer and continue
     if (currentCharCode !== LT_CHAR) {
       if (currentCharCode === AMPERSAND_CHAR) {
-        const textMode = textModeForNode(state.currentNode)
+        const textMode = state.overflow?.rawName !== undefined
+          ? state.overflow.rawMode
+          : textModeForNode(state.currentNode)
         if (textMode !== TEXT_MODE_RAWTEXT && textMode !== TEXT_MODE_PLAINTEXT)
           state.hasEncodedHtmlEntity = true
       }
@@ -946,9 +1071,11 @@ function parseHtmlInternal(
     const nextCharCode = htmlChunk.charCodeAt(i + 1)
 
     const svgIntegrationPoint = isSupportedSvgIntegrationPoint(state.currentNode)
-    if (state.currentNode?.tagHandler?.isNonNesting && !svgIntegrationPoint) {
+    if ((state.currentNode?.tagHandler?.isNonNesting && !svgIntegrationPoint) || state.overflow?.rawName !== undefined) {
+      const overflowRawName = state.overflow?.rawName
+      const textMode = overflowRawName !== undefined ? state.overflow!.rawMode : textModeForNode(state.currentNode)
       let matchingClose = false
-      if (textModeForNode(state.currentNode) !== TEXT_MODE_PLAINTEXT && nextCharCode === SLASH_CHAR) {
+      if (textMode !== TEXT_MODE_PLAINTEXT && nextCharCode === SLASH_CHAR) {
         let peekEnd = i + 2
         while (peekEnd < chunkLength) {
           const c = htmlChunk.charCodeAt(peekEnd)
@@ -957,11 +1084,24 @@ function parseHtmlInternal(
           peekEnd++
         }
         const peekTagName = normalizeTagName(htmlChunk.substring(i + 2, peekEnd))
-        const peekHandler = state.tagOverrideHandlers?.get(peekTagName)
-        const peekTagId = effectiveTagId(peekTagName, TagIdMap[peekTagName] ?? -1, state)
-        matchingClose = matchesClosingTag(state.currentNode, peekTagName, peekTagId, peekHandler?.aliasTagId !== undefined)
+        if (peekEnd === chunkLength && overflowRawName?.startsWith(peekTagName)) {
+          textBuffer += htmlChunk.substring(i)
+          break
+        }
+        if (overflowRawName !== undefined) {
+          matchingClose = overflowRawName === peekTagName
+        }
+        else {
+          const peekHandler = state.tagOverrideHandlers?.get(peekTagName)
+          const peekTagId = effectiveTagId(peekTagName, TagIdMap[peekTagName] ?? -1, state)
+          matchingClose = matchesClosingTag(state.currentNode!, peekTagName, peekTagId, peekHandler?.aliasTagId !== undefined)
+        }
       }
       if (!matchingClose) {
+        if (state.overflow?.suppressedName !== undefined) {
+          i++
+          continue
+        }
         state.textBufferContainsNonWhitespace = true
         state.lastCharWasWhitespace = false
         state.justClosedTag = false
@@ -1117,7 +1257,9 @@ function parseHtmlInternal(
         runStart = i
       }
 
-      const result = processClosingTag(htmlChunk, i, state, handleEvent)
+      const result = state.overflow
+        ? processOverflowClosingTag(htmlChunk, i, state)
+        : processClosingTag(htmlChunk, i, state, handleEvent)
       if (result.complete) {
         i = result.newPosition
         runStart = i
@@ -1561,7 +1703,12 @@ function processCdataSection(
   // `>` at position 0 and exits immediately, so the synthetic tag has no
   // attributes to parse. Mirrors the Rust engine's synthetic-tag handling.
   const open = processOpeningTag('#cdata-section', -1, '>', 0, state, handleEvent)
-  if (!open.complete || open.selfClosing || open.skip) {
+  if (!open.complete || open.selfClosing) {
+    return
+  }
+  if (open.skip) {
+    if (state.overflow?.rootName === '#cdata-section')
+      state.overflow = undefined
     return
   }
 
@@ -1633,6 +1780,18 @@ function processOpeningTag(
     && overrideHandler.aliasTagId !== builtinTagId
     && overrideHandler.isSelfClosing === true
   const selfClosing = intrinsicVoid || overrideSelfClosing || aliasedVoid || supportedForeignSelfClose
+
+  if (state.overflow) {
+    if (!selfClosing)
+      recordOverflowStart(state, tagName, tagId, tagHandler)
+    return {
+      complete: true,
+      newPosition: result.newPosition,
+      remainingText: '',
+      selfClosing,
+      skip: true,
+    }
+  }
 
   // Browser recovery: a non-head start tag while <head> is still open means the
   // page never closed its head (no </head>/<body>). Auto-close head (and anything
@@ -1742,7 +1901,7 @@ function processOpeningTag(
   }
 
   if (!selfClosing && state.depth >= MAX_ELEMENT_DEPTH) {
-    state.depthLimitReached = true
+    recordOverflowStart(state, tagName, tagId, tagHandler)
     return {
       complete: true,
       newPosition: result.newPosition,

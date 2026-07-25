@@ -10,7 +10,7 @@ use crate::tags::get_tag_handler;
 use crate::tailwind::process_tailwind_classes;
 use crate::types::{
   ElementNode, ExtractedElement, HTMLToMarkdownOptions, OutputFormat, ParsedSelector,
-  StreamingError, TailwindData,
+  StreamingError, TagHandler, TailwindData,
 };
 use crate::url::{is_autolink_uri, resolve_url, slugify_heading};
 use std::borrow::Cow;
@@ -211,6 +211,18 @@ enum TextMode {
   RawText,
   RcData,
   PlainText,
+}
+
+struct OverflowState {
+  // A matching root end tag closes every ignored inner node. Only nested roots
+  // of the same name need a counter to recover at the correct close.
+  root_name: String,
+  root_depth: usize,
+  suppressed_name: Option<String>,
+  suppressed_depth: usize,
+  raw_name: Option<String>,
+  raw_mode: TextMode,
+  raw_is_script: bool,
 }
 
 #[derive(Clone, Copy)]
@@ -426,7 +438,7 @@ fn find_script_end_tag(bytes: &[u8], start: usize, initial_state: u8) -> ScriptS
 /// duplicate state tracking, and enable full inlining of tag handler logic.
 pub struct ConvertState {
   // === Parser state ===
-  pub depth_map: [u8; MAX_TAG_ID],
+  pub depth_map: [u16; MAX_TAG_ID],
   pub depth: usize,
   has_encoded_html_entity: bool,
   last_char_was_whitespace: bool,
@@ -438,14 +450,14 @@ pub struct ConvertState {
   in_non_nesting: bool,
   script_data_state: u8,
   in_pre: bool,
-  depth_limit_reached: bool,
+  overflow: Option<OverflowState>,
   /// Filter: depth of the shallowest currently-open visually-hidden element, or
   /// None. Lets the parser skip a hidden subtree in O(1) without re-checking
   /// styles per node, and keeps this state off the public `ElementNode`.
   hidden_since_depth: Option<usize>,
   /// Unified collapse depth counter (replaces separate counters in ParseState + MarkdownState)
-  collapse_non_span_depth: u8,
-  collapse_span_depth: u8,
+  collapse_non_span_depth: u16,
+  collapse_span_depth: u16,
   first_block_parent_index: Option<usize>,
   block_parent_indices: Vec<usize>,
   parse_text_buffer: String,
@@ -585,6 +597,22 @@ impl ConvertState {
   }
 
   #[inline]
+  fn text_mode_for_tag(&self, tag_name: &str, tag_id: Option<u8>) -> TextMode {
+    let parent_in_svg = self.in_supported_svg_content();
+    let svg_integration_point = parent_in_svg
+      && (tag_name.eq_ignore_ascii_case("foreignobject")
+        || tag_name.eq_ignore_ascii_case("desc")
+        || tag_name.eq_ignore_ascii_case("title"));
+    match tag_id {
+      Some(TAG_STYLE | TAG_XMP | TAG_IFRAME | TAG_NOFRAMES | TAG_NOEMBED) => TextMode::RawText,
+      Some(TAG_TITLE) if svg_integration_point => TextMode::Data,
+      Some(TAG_TITLE | TAG_TEXTAREA) => TextMode::RcData,
+      Some(TAG_PLAINTEXT) => TextMode::PlainText,
+      _ => TextMode::Data,
+    }
+  }
+
+  #[inline]
   pub(crate) fn in_supported_svg_content(&self) -> bool {
     self
       .tokenizer_contexts
@@ -607,13 +635,7 @@ impl ConvertState {
         || tag_name.eq_ignore_ascii_case("desc")
         || tag_name.eq_ignore_ascii_case("title"));
     let in_supported_svg = tag_id == Some(TAG_SVG) || (parent_in_svg && !svg_integration_point);
-    let text_mode = match tag_id {
-      Some(TAG_STYLE | TAG_XMP | TAG_IFRAME | TAG_NOFRAMES | TAG_NOEMBED) => TextMode::RawText,
-      Some(TAG_TITLE) if svg_integration_point => TextMode::Data,
-      Some(TAG_TITLE | TAG_TEXTAREA) => TextMode::RcData,
-      Some(TAG_PLAINTEXT) => TextMode::PlainText,
-      _ => TextMode::Data,
-    };
+    let text_mode = self.text_mode_for_tag(tag_name, tag_id);
     self.tokenizer_contexts.push(TokenizerContext {
       text_mode,
       in_supported_svg,
@@ -665,7 +687,7 @@ impl ConvertState {
       in_non_nesting: false,
       script_data_state: SCRIPT_DATA,
       in_pre: false,
-      depth_limit_reached: false,
+      overflow: None,
       hidden_since_depth: None,
       collapse_non_span_depth: 0,
       collapse_span_depth: 0,
@@ -834,6 +856,11 @@ impl ConvertState {
       + self.script_text_buffer.len()
       + self.list_indent.len()
       + self.pre_fence_lang.len()
+      + self.overflow.as_ref().map_or(0, |overflow| {
+        overflow.root_name.len()
+          + overflow.suppressed_name.as_ref().map_or(0, String::len)
+          + overflow.raw_name.as_ref().map_or(0, String::len)
+      })
       + self
         .code_fence
         .as_ref()
@@ -855,6 +882,14 @@ impl ConvertState {
       + self.script_text_buffer.capacity()
       + self.list_indent.capacity()
       + self.pre_fence_lang.capacity()
+      + self.overflow.as_ref().map_or(0, |overflow| {
+        overflow.root_name.capacity()
+          + overflow
+            .suppressed_name
+            .as_ref()
+            .map_or(0, String::capacity)
+          + overflow.raw_name.as_ref().map_or(0, String::capacity)
+      })
       + self.code_fence.as_ref().map_or(0, |fence| {
         fence.indent.capacity() + fence.language.capacity()
       })
@@ -881,6 +916,7 @@ impl ConvertState {
     self.script_text_buffer = String::new();
     self.list_indent = String::new();
     self.pre_fence_lang = String::new();
+    self.overflow = None;
     self.code_fence = None;
     self.open_markers = Vec::new();
     self.code_spans = Vec::new();
@@ -1264,9 +1300,6 @@ impl ConvertState {
   }
 
   pub fn process_html(&mut self, chunk: &str) -> String {
-    if self.depth_limit_reached {
-      return String::new();
-    }
     // Reuse text_buffer allocation from previous call if available
     let mut text_buffer = std::mem::take(&mut self.parse_text_buffer);
     text_buffer.clear();
@@ -1282,10 +1315,11 @@ impl ConvertState {
     let mut run_start = 0usize;
     let mut carry = false;
 
-    if self
-      .stack
-      .last()
-      .is_some_and(|node| node.tag_id == Some(TAG_SCRIPT) && node.custom_name.is_none())
+    if self.overflow.is_none()
+      && self
+        .stack
+        .last()
+        .is_some_and(|node| node.tag_id == Some(TAG_SCRIPT) && node.custom_name.is_none())
     {
       match self.process_script_chunk(chunk, i) {
         ScriptChunk::Closed(close_index) => i = close_index,
@@ -1297,11 +1331,45 @@ impl ConvertState {
       }
     }
 
-    while i < chunk_length && !self.depth_limit_reached && self.streaming_error.is_none() {
+    while i < chunk_length && self.streaming_error.is_none() {
       if text_buffer.is_empty() {
         run_start = i;
       }
+
+      if self
+        .overflow
+        .as_ref()
+        .is_some_and(|overflow| overflow.raw_is_script)
+      {
+        let scan = find_script_end_tag(bytes, i, self.script_data_state);
+        self.script_data_state = scan.state;
+        match scan.boundary {
+          ScriptScanBoundary::Close(close_index) => i = close_index,
+          ScriptScanBoundary::Pending(pending_start) => {
+            run_start = pending_start;
+            carry = true;
+            break;
+          }
+          ScriptScanBoundary::Complete => {
+            i = chunk_length;
+            continue;
+          }
+        }
+      }
+
       let cc = bytes[i];
+
+      if cc != LT_CHAR
+        && self
+          .overflow
+          .as_ref()
+          .is_some_and(|overflow| overflow.suppressed_name.is_some())
+      {
+        while i < chunk_length && bytes[i] != LT_CHAR {
+          i += 1;
+        }
+        continue;
+      }
 
       if cc != LT_CHAR {
         // FAST PATH: batch contiguous plain ASCII text (>32, <128, not & or <)
@@ -1357,7 +1425,11 @@ impl ConvertState {
         }
 
         if cc == AMPERSAND_CHAR {
-          let text_mode = self.text_mode();
+          let text_mode = self
+            .overflow
+            .as_ref()
+            .and_then(|overflow| overflow.raw_name.as_ref().map(|_| overflow.raw_mode))
+            .unwrap_or_else(|| self.text_mode());
           if text_mode != TextMode::RawText && text_mode != TextMode::PlainText {
             self.has_encoded_html_entity = true;
           }
@@ -1421,8 +1493,23 @@ impl ConvertState {
       // Non-nesting guard: inside script/style/title/textarea, only the
       // matching closing tag exits. All other '<' patterns (comments,
       // non-matching closing tags, opening tags) are treated as literal text.
-      if self.in_non_nesting {
-        let text_mode = self.text_mode();
+      if self.in_non_nesting
+        || self
+          .overflow
+          .as_ref()
+          .is_some_and(|overflow| overflow.raw_name.is_some())
+      {
+        let (text_mode, raw_name, suppressed) = if let Some(overflow) = &self.overflow
+          && let Some(raw_name) = &overflow.raw_name
+        {
+          (
+            overflow.raw_mode,
+            Some(raw_name.as_str()),
+            overflow.suppressed_name.is_some(),
+          )
+        } else {
+          (self.text_mode(), None, false)
+        };
         let next = bytes[i + 1];
         if text_mode != TextMode::PlainText && next == SLASH_CHAR {
           let peek_start = i + 2;
@@ -1435,20 +1522,34 @@ impl ConvertState {
             peek_end += 1;
           }
           let peek_name = &chunk[peek_start..peek_end];
-          let peek_tag_id = crate::consts::get_tag_id_ci_bytes(peek_name.as_bytes());
-          if self.stack.last().is_some_and(|curr| {
-            curr.custom_name.as_deref().map_or_else(
-              || curr.tag_id == peek_tag_id,
-              |name| name.eq_ignore_ascii_case(peek_name),
-            )
-          }) {
+          if peek_end == chunk_length
+            && raw_name.is_some_and(|name| name.starts_with(&peek_name.to_ascii_lowercase()))
+          {
+            carry = true;
+            break;
+          }
+          let raw_matches = raw_name.is_some_and(|name| name.eq_ignore_ascii_case(peek_name));
+          let stack_matches = raw_name.is_none() && {
+            let peek_tag_id = crate::consts::get_tag_id_ci_bytes(peek_name.as_bytes());
+            self.stack.last().is_some_and(|curr| {
+              curr.custom_name.as_deref().map_or_else(
+                || curr.tag_id == peek_tag_id,
+                |name| name.eq_ignore_ascii_case(peek_name),
+              )
+            })
+          };
+          if raw_matches || stack_matches {
             // Matching closing tag: fall through to normal closing tag processing
             if !text_buffer.is_empty() {
               self.process_text_buffer(&mut text_buffer);
               text_buffer.clear();
               run_start = i;
             }
-            let result = self.process_closing_tag(chunk, i);
+            let result = if self.overflow.is_some() {
+              self.process_overflow_closing_tag(chunk, i)
+            } else {
+              self.process_closing_tag(chunk, i)
+            };
             if result.complete {
               i = result.new_position;
             } else {
@@ -1459,6 +1560,10 @@ impl ConvertState {
           }
         }
         // Not a matching closing tag: treat '<' as literal text
+        if suppressed {
+          i += 1;
+          continue;
+        }
         self.text_buffer_has_inline_gfm_hazard = true;
         if !self.push_parse_char(&mut text_buffer, '<') {
           break;
@@ -1601,7 +1706,11 @@ impl ConvertState {
           text_buffer.clear();
           run_start = i;
         }
-        let result = self.process_closing_tag(chunk, i);
+        let result = if self.overflow.is_some() {
+          self.process_overflow_closing_tag(chunk, i)
+        } else {
+          self.process_closing_tag(chunk, i)
+        };
         if result.complete {
           i = result.new_position;
         } else {
@@ -1828,6 +1937,10 @@ impl ConvertState {
   /// trailing text was scanned persist on `self`, so `process_text_buffer`
   /// commits it exactly as if the next tag had triggered the flush.
   pub fn finalize(&mut self, leftover: &str) {
+    let overflow_suppressed = self
+      .overflow
+      .as_ref()
+      .is_some_and(|overflow| overflow.suppressed_name.is_some());
     let in_script = self
       .stack
       .last()
@@ -1836,8 +1949,10 @@ impl ConvertState {
       self.push_script_text(leftover);
       self.flush_script_text();
       self.script_data_state = SCRIPT_DATA;
-    } else if !leftover.is_empty()
+    } else if !overflow_suppressed
+      && !leftover.is_empty()
       && (leftover.as_bytes()[0] != LT_CHAR
+        || self.overflow.is_some()
         || self.in_non_nesting
         || self.text_mode() != TextMode::Data
         || matches!(leftover, "<" | "</")
@@ -2163,5 +2278,19 @@ mod bounded_buffer_tests {
     let overflow =
       reserve_vec_accounted(&mut value, isize::MAX as usize, 0, usize::MAX).unwrap_err();
     assert_eq!(overflow, StreamingError::CapacityOverflow);
+  }
+
+  #[test]
+  fn excessive_nesting_keeps_the_real_stacks_capped() {
+    let html = "<div>".repeat(100_000);
+    let mut state = ConvertState::new(HTMLToMarkdownOptions::default(), 0, OutputFormat::Markdown);
+    state.process_html(&html);
+
+    assert_eq!(state.stack.len(), 512);
+    assert_eq!(state.tokenizer_contexts.len(), 512);
+    assert_eq!(
+      state.overflow.as_ref().map(|overflow| overflow.root_depth),
+      Some(100_000 - 512)
+    );
   }
 }
