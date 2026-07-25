@@ -14,7 +14,7 @@ interface ResolvedOptions {
 
 const MINIMAL_FILTER_EXCLUDE = ['form', 'fieldset', 'object', 'embed', 'footer', 'aside', 'iframe', 'input', 'textarea', 'select', 'button', 'nav'] as const
 const MINIMAL_FILTER_DEFAULT = { exclude: MINIMAL_FILTER_EXCLUDE as unknown as string[] }
-const CLEAN_ALL: CleanOptions = { urls: true, fragments: true, emptyLinks: true, redundantLinks: true, selfLinkHeadings: true, emptyImages: true, emptyLinkText: true }
+const CLEAN_ALL: CleanOptions = { urls: true, fragments: true, emptyLinks: true, blankLines: true, redundantLinks: true, selfLinkHeadings: true, emptyImages: true, emptyLinkText: true }
 
 function resolveCleanConfig(options: ResolvableOptions, minimal: boolean): { cleanUrls: boolean, clean?: CleanOptions } {
   const cleanUrls = options.cleanUrls === true
@@ -28,7 +28,7 @@ function resolveCleanConfig(options: ResolvableOptions, minimal: boolean): { cle
     return { cleanUrls }
   const resolved = cleanOpt === true ? CLEAN_ALL : cleanOpt
   return {
-    cleanUrls: cleanUrls || resolved.urls === true,
+    cleanUrls: resolved.urls === true,
     clean: resolved,
   }
 }

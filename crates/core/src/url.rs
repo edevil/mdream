@@ -171,6 +171,35 @@ pub(crate) fn slugify_heading(text: &str) -> String {
   slug
 }
 
+pub(crate) fn normalize_fragment(value: &str) -> String {
+  let value = value.strip_prefix('#').unwrap_or(value);
+  let bytes = value.as_bytes();
+  let mut decoded = Vec::with_capacity(bytes.len());
+  let mut index = 0;
+  while index < bytes.len() {
+    if bytes[index] == b'%'
+      && index + 2 < bytes.len()
+      && let (Some(high), Some(low)) = (hex_value(bytes[index + 1]), hex_value(bytes[index + 2]))
+    {
+      decoded.push(high << 4 | low);
+      index += 3;
+    } else {
+      decoded.push(bytes[index]);
+      index += 1;
+    }
+  }
+  slugify_heading(&String::from_utf8_lossy(&decoded))
+}
+
+const fn hex_value(byte: u8) -> Option<u8> {
+  match byte {
+    b'0'..=b'9' => Some(byte - b'0'),
+    b'a'..=b'f' => Some(byte - b'a' + 10),
+    b'A'..=b'F' => Some(byte - b'A' + 10),
+    _ => None,
+  }
+}
+
 #[inline]
 pub(crate) fn is_url_allowed(url: &str, policy: UrlPolicy) -> bool {
   if policy == UrlPolicy::Preserve {

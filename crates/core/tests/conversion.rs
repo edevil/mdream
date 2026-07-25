@@ -2165,6 +2165,36 @@ fn clean_urls_images() {
 }
 
 #[test]
+fn explicit_clean_config_controls_url_cleanup() {
+  let html = r#"<a href="https://example.com/?utm_source=test&keep=1">Link</a>"#;
+  assert_eq!(
+    html_to_markdown(
+      html,
+      HTMLToMarkdownOptions {
+        clean_urls: true,
+        clean: Some(mdream::types::CleanConfig::default()),
+        ..Default::default()
+      }
+    ),
+    "[Link](https://example.com/?utm_source=test&keep=1)"
+  );
+  assert_eq!(
+    html_to_markdown(
+      html,
+      HTMLToMarkdownOptions {
+        clean_urls: false,
+        clean: Some(mdream::types::CleanConfig {
+          urls: true,
+          ..Default::default()
+        }),
+        ..Default::default()
+      }
+    ),
+    "[Link](https://example.com/?keep=1)"
+  );
+}
+
+#[test]
 fn strict_url_policy_rejects_dangerous_link_and_image_schemes() {
   let options = HTMLToMarkdownOptions {
     url_policy: UrlPolicy::Strict,
@@ -2319,6 +2349,46 @@ fn clean_self_referencing_heading_link() {
       clean_all()
     ),
     "## New Project"
+  );
+}
+
+#[test]
+fn clean_self_link_heading_requires_the_actual_heading_target() {
+  let clean = mdream::types::CleanConfig {
+    self_link_headings: true,
+    ..Default::default()
+  };
+  assert_eq!(
+    convert_with_clean(r##"<h2><a href="#other">Title</a></h2>"##, clean.clone()),
+    "## [Title](#other)"
+  );
+  assert_eq!(
+    convert_with_clean(
+      r##"<h2><a href="#title">Title</a> suffix</h2>"##,
+      clean.clone()
+    ),
+    "## [Title](#title) suffix"
+  );
+  assert_eq!(
+    convert_with_clean(
+      r##"<h2><a href="#my%2Dheading">My Heading</a></h2>"##,
+      clean.clone()
+    ),
+    "## My Heading"
+  );
+  assert_eq!(
+    convert_with_clean(
+      r##"<h2><a href="#same">Same</a></h2><h2><a href="#same">Same</a></h2>"##,
+      clean.clone()
+    ),
+    "## Same\n\n## [Same](#same)"
+  );
+  assert_eq!(
+    convert_with_clean(
+      r##"<h2><a href="#same">Same</a></h2><h2><a href="#same-1">Same</a></h2>"##,
+      clean
+    ),
+    "## Same\n\n## Same"
   );
 }
 

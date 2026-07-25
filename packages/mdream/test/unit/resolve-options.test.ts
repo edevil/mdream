@@ -51,6 +51,11 @@ describe('htmlToMarkdown resolve options', () => {
     expect(md).not.toContain('utm_source')
   })
 
+  it('treats an explicit clean config as authoritative for URL cleanup', () => {
+    expect(resolveOptions({ cleanUrls: true, clean: { urls: false } }).napiOpts.cleanUrls).toBe(false)
+    expect(resolveOptions({ cleanUrls: false, clean: { urls: true } }).napiOpts.cleanUrls).toBe(true)
+  })
+
   it('frontmatter callback receives extracted data', () => {
     const cb = vi.fn()
     const html = `<html><head><title>Page</title></head><body><p>Content</p></body></html>`

@@ -13,7 +13,7 @@ use crate::types::{
   ElementNode, ExtractedElement, HTMLToMarkdownOptions, OutputFormat, ParsedSelector,
   StreamingError, TagHandler, TailwindData,
 };
-use crate::url::{is_autolink_uri, resolve_url_with_policy, slugify_heading};
+use crate::url::{is_autolink_uri, normalize_fragment, resolve_url_with_policy, slugify_heading};
 use std::borrow::Cow;
 use std::collections::TryReserveError;
 
@@ -66,6 +66,14 @@ struct CodeFenceState {
   content_start: usize,
   indent: String,
   language: String,
+}
+
+struct SelfLinkHeadingState {
+  bracket_start: usize,
+  text_start: usize,
+  text_len: usize,
+  link_end: usize,
+  fragment: String,
 }
 
 #[derive(Clone)]
@@ -293,6 +301,7 @@ const CLEAN_REDUNDANT_LINKS: u8 = 4;
 const CLEAN_SELF_LINK_HEADINGS: u8 = 8;
 const CLEAN_EMPTY_IMAGES: u8 = 16;
 const CLEAN_EMPTY_LINK_TEXT: u8 = 32;
+const CLEAN_BLANK_LINES: u8 = 64;
 
 const SCRIPT_DATA: u8 = 0;
 const SCRIPT_DATA_ESCAPED: u8 = 1;
@@ -638,6 +647,7 @@ pub struct ConvertState {
 
   // Clean mode — bitmask for zero-cost when disabled
   clean_flags: u8,
+  clean_newline_run: u8,
   /// Set when current TAG_A has a meaningless href and should be rendered as plain text
   skip_current_link: bool,
   /// Buffer position of the `[` character written for TAG_A enter
@@ -659,6 +669,8 @@ pub struct ConvertState {
   in_heading: bool,
   /// Buffer position at heading start (for extracting heading text)
   heading_buffer_start: usize,
+  /// A fragment link that may span the complete current heading.
+  self_link_heading: Option<SelfLinkHeadingState>,
 
   /// Cumulative indent string for list-item continuation content. Grows by
   /// each ancestor `<li>`'s marker width (`"- "` = 2, `"N. "` = digits(N)+2),
@@ -874,6 +886,7 @@ impl ConvertState {
       plain_text,
       preserve_leading_whitespace: false,
       clean_flags: 0,
+      clean_newline_run: 0,
       skip_current_link: false,
       link_bracket_pos: 0,
       open_markers: Vec::new(),
@@ -888,6 +901,7 @@ impl ConvertState {
       fragment_links: Vec::new(),
       in_heading: false,
       heading_buffer_start: 0,
+      self_link_heading: None,
 
       list_indent: String::new(),
       list_indent_widths: if streaming_limit.is_some() {
@@ -908,7 +922,7 @@ impl ConvertState {
     // Resolve clean config into bitmask
     let effective_clean_urls;
     if let Some(ref clean) = s.options.clean {
-      effective_clean_urls = clean.urls || s.options.clean_urls;
+      effective_clean_urls = clean.urls;
       let mut flags = 0u8;
       if clean.empty_links {
         flags |= CLEAN_EMPTY_LINKS;
@@ -927,6 +941,9 @@ impl ConvertState {
       }
       if clean.empty_link_text {
         flags |= CLEAN_EMPTY_LINK_TEXT;
+      }
+      if clean.blank_lines {
+        flags |= CLEAN_BLANK_LINES;
       }
       s.clean_flags = flags;
     } else {
@@ -1011,6 +1028,13 @@ impl ConvertState {
       + self.code_spans.len() * std::mem::size_of::<CodeSpanState>()
       + self.blockquotes.len() * std::mem::size_of::<BlockquoteFrame>()
       + self.list_indent_widths.len() * std::mem::size_of::<u8>()
+      + self.heading_slugs.len() * std::mem::size_of::<String>()
+      + self.heading_slugs.iter().map(String::len).sum::<usize>()
+      + self.fragment_links.len() * std::mem::size_of::<(usize, usize)>()
+      + self
+        .self_link_heading
+        .as_ref()
+        .map_or(0, |link| link.fragment.len())
       + self.stack.len() * std::mem::size_of::<ElementNode>()
       + self
         .stack
@@ -1070,6 +1094,17 @@ impl ConvertState {
       + vector_capacity_bytes(&self.code_spans)
       + vector_capacity_bytes(&self.blockquotes)
       + vector_capacity_bytes(&self.list_indent_widths)
+      + vector_capacity_bytes(&self.heading_slugs)
+      + self
+        .heading_slugs
+        .iter()
+        .map(String::capacity)
+        .sum::<usize>()
+      + vector_capacity_bytes(&self.fragment_links)
+      + self
+        .self_link_heading
+        .as_ref()
+        .map_or(0, |link| link.fragment.capacity())
       + vector_capacity_bytes(&self.stack)
       + self
         .stack
@@ -1264,6 +1299,9 @@ impl ConvertState {
     self.code_spans = Vec::new();
     self.blockquotes = Vec::new();
     self.list_indent_widths = Vec::new();
+    self.heading_slugs = Vec::new();
+    self.fragment_links = Vec::new();
+    self.self_link_heading = None;
     self.stack = Vec::new();
     self.tokenizer_contexts = Vec::new();
     self.block_parent_indices = Vec::new();
@@ -1549,6 +1587,45 @@ impl ConvertState {
     true
   }
 
+  fn set_self_link_heading(&mut self, link: SelfLinkHeadingState) -> bool {
+    self.self_link_heading = None;
+    if let Some(limit) = self.streaming_limit {
+      let Some(retained) = self
+        .retained_buffer_capacity()
+        .checked_add(link.fragment.capacity())
+      else {
+        self.fail_streaming(StreamingError::CapacityOverflow);
+        return false;
+      };
+      if retained > limit {
+        self.fail_streaming(StreamingError::BufferLimitExceeded);
+        return false;
+      }
+    }
+    self.self_link_heading = Some(link);
+    true
+  }
+
+  fn push_heading_slug(&mut self, slug: String) -> bool {
+    if let Some(limit) = self.streaming_limit {
+      let Some(retained) = self.retained_buffer_capacity().checked_add(slug.capacity()) else {
+        self.fail_streaming(StreamingError::CapacityOverflow);
+        return false;
+      };
+      let Some(required) = self.heading_slugs.len().checked_add(1) else {
+        self.fail_streaming(StreamingError::CapacityOverflow);
+        return false;
+      };
+      if let Err(error) = reserve_vec_accounted(&mut self.heading_slugs, required, retained, limit)
+      {
+        self.fail_streaming(error);
+        return false;
+      }
+    }
+    self.heading_slugs.push(slug);
+    true
+  }
+
   pub(crate) fn set_pre_fence_language(&mut self, language: &str) -> bool {
     if self.streaming_limit.is_none() {
       self.pre_fence_lang.clear();
@@ -1595,6 +1672,7 @@ impl ConvertState {
       || !self.code_spans.is_empty()
       || self.code_fence.is_some()
       || !self.blockquotes.is_empty()
+      || (self.in_heading && self.clean_flags & CLEAN_SELF_LINK_HEADINGS != 0)
     {
       return;
     }
@@ -2500,7 +2578,30 @@ impl ConvertState {
         self.buffer = result;
       }
     }
-    std::mem::take(&mut self.buffer)
+    let output = std::mem::take(&mut self.buffer);
+    self.clean_blank_lines(output)
+  }
+
+  fn clean_blank_lines(&mut self, content: String) -> String {
+    if self.plain_text || self.clean_flags & CLEAN_BLANK_LINES == 0 {
+      return content;
+    }
+
+    let mut output = String::with_capacity(content.len());
+    let mut run = self.clean_newline_run;
+    for character in content.chars() {
+      if character == '\n' {
+        run = run.saturating_add(1);
+        if run <= 2 {
+          output.push(character);
+        }
+      } else {
+        run = 0;
+        output.push(character);
+      }
+    }
+    self.clean_newline_run = run;
+    output
   }
 
   /// Commit end-of-input state: flush trailing buffered text and close any
@@ -2633,12 +2734,14 @@ impl ConvertState {
     self.has_streamed_output = true;
     self.last_yielded_length = stable_end;
     self.drain_streamed_prefix();
-    new_content
+    self.clean_blank_lines(new_content)
   }
 
   fn earliest_rewrite_start(&self) -> Option<usize> {
     let mut start = (self.depth_map[TAG_A as usize] > 0).then_some(self.link_bracket_pos);
     for candidate in [
+      (self.in_heading && self.clean_flags & CLEAN_SELF_LINK_HEADINGS != 0)
+        .then_some(self.heading_buffer_start),
       self.open_markers.first().map(|marker| marker.1),
       self.code_spans.first().map(|span| span.output_start),
       self.code_fence.as_ref().map(|fence| fence.output_start),
@@ -2726,6 +2829,14 @@ impl ConvertState {
     }
     for frame in &mut self.blockquotes {
       frame.content_start -= drain_end;
+    }
+    if self.in_heading {
+      self.heading_buffer_start -= drain_end;
+    }
+    if let Some(link) = &mut self.self_link_heading {
+      link.bracket_start -= drain_end;
+      link.text_start -= drain_end;
+      link.link_end -= drain_end;
     }
   }
 }

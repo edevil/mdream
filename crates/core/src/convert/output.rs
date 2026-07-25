@@ -736,13 +736,14 @@ impl ConvertState {
     }
 
     // Clean: track heading start for slug collection
-    if self.clean_flags & CLEAN_FRAGMENTS != 0
+    if self.clean_flags & (CLEAN_FRAGMENTS | CLEAN_SELF_LINK_HEADINGS) != 0
       && let Some(id) = tag_id
       && (TAG_H1..=TAG_H6).contains(&id)
       && self.depth_map[TAG_A as usize] == 0
     {
       self.in_heading = true;
       self.heading_buffer_start = self.buffer.len();
+      self.self_link_heading = None;
     }
   }
 
@@ -886,6 +887,7 @@ impl ConvertState {
         self.last_node_is_inline = is_inline;
         return;
       }
+      self.link_bracket_pos = bracket_pos;
       let text_start = bracket_pos + 1;
       let link_text = if text_start <= buf_len && self.buffer.is_char_boundary(text_start) {
         &self.buffer[text_start..buf_len]
@@ -899,23 +901,6 @@ impl ConvertState {
         self.truncate_output(bracket_pos);
         self.last_node_is_inline = is_inline;
         return;
-      }
-
-      // selfLinkHeadings: ## [Title](#slug) → ## Title
-      if self.clean_flags & CLEAN_SELF_LINK_HEADINGS != 0 {
-        let in_heading = (TAG_H1..=TAG_H6).any(|h| self.depth_map[h as usize] > 0);
-        if in_heading
-          && let Some(href) = node.attributes.get("href")
-          && href.starts_with('#')
-          && text_len > 0
-        {
-          if !self.replace_output_range(bracket_pos, text_start, "") {
-            return;
-          }
-          self.last_content_start = Some(bracket_pos);
-          self.last_node_is_inline = is_inline;
-          return;
-        }
       }
 
       // redundantLinks: [url](url) → url
@@ -945,9 +930,39 @@ impl ConvertState {
       && (TAG_H1..=TAG_H6).contains(&id)
     {
       let heading_text = &self.buffer[self.heading_buffer_start..];
-      let slug = slugify_heading(heading_text);
+      let id_is_unique = node.attributes.get("id").is_none_or(|id| {
+        let id = normalize_fragment(id);
+        !self.heading_slugs.iter().any(|existing| existing == &id)
+      });
+      let slug = node.attributes.get("id").map_or_else(
+        || {
+          let base = slugify_heading(heading_text);
+          let mut slug = base.clone();
+          let mut duplicate = 0;
+          while self.heading_slugs.iter().any(|existing| existing == &slug) {
+            duplicate += 1;
+            slug = format!("{base}-{duplicate}");
+          }
+          slug
+        },
+        |id| normalize_fragment(id),
+      );
+      if id_is_unique
+        && let Some(link) = self.self_link_heading.take()
+        && link.bracket_start == self.heading_buffer_start
+        && link.link_end == self.buffer.len()
+        && link.fragment == slug
+      {
+        if !self.replace_output_range(link.bracket_start, link.text_start, "") {
+          return;
+        }
+        self.truncate_output(link.bracket_start + link.text_len);
+        self.last_content_start = Some(link.bracket_start);
+      }
       if !slug.is_empty() {
-        self.heading_slugs.push(slug);
+        if !self.push_heading_slug(slug) {
+          return;
+        }
       }
       self.in_heading = false;
     }
@@ -958,6 +973,19 @@ impl ConvertState {
       self.write_output(false, is_inline, configured_new_lines, None, false);
       // Write link close directly
       if let Some(href) = node.attributes.get("href") {
+        let self_link = (self.clean_flags & CLEAN_SELF_LINK_HEADINGS != 0
+          && self.in_heading
+          && href.starts_with('#')
+          && self.link_bracket_pos < self.buffer.len()
+          && self.buffer.as_bytes()[self.link_bracket_pos] == b'['
+          && self.link_bracket_pos + 1 < self.buffer.len())
+        .then(|| SelfLinkHeadingState {
+          bracket_start: self.link_bracket_pos,
+          text_start: self.link_bracket_pos + 1,
+          text_len: self.buffer.len() - self.link_bracket_pos - 1,
+          link_end: 0,
+          fragment: normalize_fragment(href),
+        });
         let resolved = resolve_url_with_policy(
           href,
           self.options.origin.as_deref(),
@@ -1023,6 +1051,12 @@ impl ConvertState {
         );
         if !self.push_output_str(&resource) {
           return;
+        }
+        if let Some(mut self_link) = self_link {
+          self_link.link_end = self.buffer.len();
+          if !self.set_self_link_heading(self_link) {
+            return;
+          }
         }
         self.last_content_start = Some(self.link_bracket_pos);
       }

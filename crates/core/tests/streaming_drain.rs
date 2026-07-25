@@ -8,7 +8,7 @@ use std::time::{Duration, Instant};
 
 use mdream::MarkdownStreamProcessor;
 use mdream::html_to_markdown;
-use mdream::types::{CleanConfig, HTMLToMarkdownOptions};
+use mdream::types::{CleanConfig, HTMLToMarkdownOptions, PluginConfig, TagOverrideConfig};
 
 // ── Peak-allocation tracking allocator ──
 // Streaming must free already-yielded output; a criterion/time bench can't show
@@ -78,9 +78,50 @@ fn stream_chars(html: &str, max_bytes: usize, opts: HTMLToMarkdownOptions) -> St
   out
 }
 
+#[test]
+fn blank_line_cleanup_is_streaming_invariant() {
+  let html = "<p>First</p><gap></gap><p>Second</p>";
+  let options = HTMLToMarkdownOptions {
+    clean: Some(CleanConfig {
+      blank_lines: true,
+      ..Default::default()
+    }),
+    plugins: Some(PluginConfig::default().with_tag_override(
+      "gap",
+      TagOverrideConfig {
+        enter: Some("\n\n\n\n".into()),
+        exit: Some(String::new()),
+        spacing: Some([0, 0]),
+        is_inline: Some(true),
+        ..Default::default()
+      },
+    )),
+    ..Default::default()
+  };
+  let expected = html_to_markdown(html, options.clone());
+  assert!(!expected.contains("\n\n\n"));
+  for chunk in 1..=html.len() {
+    assert_eq!(stream_chunks(html, chunk, options.clone()), expected);
+  }
+}
+
+#[test]
+fn self_link_heading_cleanup_is_streaming_invariant() {
+  let html = r##"<h2><a href="#my-heading">My Heading</a></h2><p>After</p>"##;
+  let options = HTMLToMarkdownOptions {
+    clean: Some(CleanConfig {
+      self_link_headings: true,
+      ..Default::default()
+    }),
+    ..Default::default()
+  };
+
+  assert_stream_matches_every_split(html, options);
+}
+
 // Compares chunked streaming against one-shot, so it excludes the
-// rewrite-after-yield constructs (autolink text==url, self-link headings,
-// redundant `[url](url)`) that diverge from one-shot even on `main`. Drain
+// rewrite-after-yield constructs (autolink text==url and redundant
+// `[url](url)`) that diverge from one-shot even on `main`. Drain
 // transparency for those is covered by lib.rs `drain_equiv`.
 const CORPUS: &[&str] = &[
   "<h1>Title</h1><p>Para one.</p><p>Para <strong>two</strong>.</p>",

@@ -611,7 +611,7 @@ pub struct HTMLToMarkdownOptions {
   /// Policy for preserving or rejecting dangerous resource URL schemes.
   pub url_policy: UrlPolicy,
   /// Strip common tracking query parameters (utm_*, fbclid, gclid, …) from URLs.
-  /// Shorthand for `clean: Some(CleanConfig { urls: true, ..Default::default() })`.
+  /// Used only when `clean` is `None`; an explicit `CleanConfig` is authoritative.
   pub clean_urls: bool,
   /// Fine-grained post-processing cleanup rules.
   pub clean: Option<CleanConfig>,

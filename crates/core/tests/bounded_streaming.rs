@@ -335,6 +335,41 @@ fn bounded_output_matches_legacy_for_formats_and_chunking() {
 }
 
 #[test]
+fn self_link_heading_cleanup_obeys_the_capacity_limit() {
+  let options = HTMLToMarkdownOptions {
+    clean: Some(CleanConfig {
+      self_link_headings: true,
+      ..Default::default()
+    }),
+    ..Default::default()
+  };
+  let html = r##"<h2><a href="#my-heading">My Heading</a></h2><p>After</p>"##;
+  let mut legacy = MarkdownStreamProcessor::new(options.clone());
+  let mut bounded =
+    BoundedMarkdownStreamProcessor::new(options.clone(), limits(64 * 1024)).unwrap();
+  let mut expected = String::new();
+  let mut actual = String::new();
+  for chunk in html.as_bytes().chunks(3) {
+    let chunk = std::str::from_utf8(chunk).unwrap();
+    expected.push_str(&legacy.process_chunk(chunk));
+    actual.push_str(&bounded.process_chunk(chunk).unwrap());
+    assert!(bounded.buffered_capacity() <= 64 * 1024);
+  }
+  expected.push_str(&legacy.finish());
+  actual.push_str(&bounded.finish().unwrap());
+  assert_eq!(actual, expected);
+
+  let mut bounded = BoundedMarkdownStreamProcessor::new(options, limits(1024)).unwrap();
+  let error = (0..1024).find_map(|index| {
+    bounded
+      .process_chunk(&format!("<h2>Unique heading {index}</h2>"))
+      .err()
+  });
+  assert_eq!(error, Some(StreamingError::BufferLimitExceeded));
+  assert_eq!(bounded.buffered_capacity(), 0);
+}
+
+#[test]
 fn attributes_and_tables_enforce_parser_cardinality_limits() {
   fn assert_parser_limit(html: &str) {
     let mut processor =

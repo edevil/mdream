@@ -3,6 +3,27 @@ import type { EngineOptions, NodeEvent, TagHandler, TransformPlugin } from './ty
 import { createMarkdownProcessor } from './markdown-processor'
 import { finalizeParse, parseHtmlStream } from './parse'
 
+function createBlankLineCleaner(enabled: boolean): (chunk: string) => string {
+  let newlineRun = 0
+  return (chunk) => {
+    if (!enabled)
+      return chunk
+    let output = ''
+    for (const character of chunk) {
+      if (character === '\n') {
+        newlineRun++
+        if (newlineRun <= 2)
+          output += character
+      }
+      else {
+        newlineRun = 0
+        output += character
+      }
+    }
+    return output
+  }
+}
+
 /**
  * Creates a markdown stream from an HTML stream
  * @param htmlStream - ReadableStream of HTML content (as Uint8Array or string)
@@ -24,6 +45,10 @@ export async function* streamHtmlToMarkdown(
   const reader = htmlStream.getReader()
 
   const processor = createMarkdownProcessor(options, resolvedPlugins, tagOverrideHandlers)
+  const clean = options.clean
+  const cleanChunk = createBlankLineCleaner(
+    options.format !== 'text' && (clean === true || (typeof clean === 'object' && clean.blankLines === true)),
+  )
   const parseState: ParseState = {
     depthMap: processor.state.depthMap,
     depth: 0,
@@ -53,7 +78,7 @@ export async function* streamHtmlToMarkdown(
 
       remainingHtml = parseHtmlStream(htmlContent, parseState, handleEvent)
 
-      const chunk = processor.getMarkdownChunk()
+      const chunk = cleanChunk(processor.getMarkdownChunk())
       if (chunk) {
         yield chunk
       }
@@ -68,7 +93,7 @@ export async function* streamHtmlToMarkdown(
     finalizeParse(leftover, parseState, handleEvent)
 
     // Emit any final content
-    const finalChunk = processor.getMarkdownChunk(true)
+    const finalChunk = cleanChunk(processor.getMarkdownChunk(true))
     if (finalChunk) {
       yield finalChunk
     }

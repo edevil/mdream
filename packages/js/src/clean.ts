@@ -26,7 +26,7 @@ export interface CleanOptions {
 
 export function resolveClean(clean: boolean | CleanOptions): CleanOptions {
   if (clean === true)
-    return { urls: true, fragments: true, emptyLinks: true, redundantLinks: true, selfLinkHeadings: true, emptyImages: true, emptyLinkText: true }
+    return { urls: true, fragments: true, emptyLinks: true, blankLines: true, redundantLinks: true, selfLinkHeadings: true, emptyImages: true, emptyLinkText: true }
   if (clean === false)
     return {}
   return clean
@@ -146,6 +146,7 @@ function stripHeadingFormatting(text: string): string {
 
 function collectHeadingSlugs(md: string): Set<string> {
   const slugs = new Set<string>()
+  const slugCounts = new Map<string, number>()
   const len = md.length
   let i = 0
   while (i < len) {
@@ -161,8 +162,12 @@ function collectHeadingSlugs(md: string): Set<string> {
         const lineEnd = md.indexOf('\n', j)
         const headingText = lineEnd === -1 ? md.slice(j) : md.slice(j, lineEnd)
         const cleaned = stripHeadingFormatting(headingText)
-        if (cleaned)
-          slugs.add(slugify(cleaned))
+        if (cleaned) {
+          const base = slugify(cleaned)
+          const count = slugCounts.get(base) || 0
+          slugCounts.set(base, count + 1)
+          slugs.add(count === 0 ? base : `${base}-${count}`)
+        }
       }
     }
     const nl = md.indexOf('\n', i)
@@ -297,6 +302,7 @@ export function cleanSelfLinkHeadings(md: string): string {
   const len = md.length
   let result = ''
   let i = 0
+  const slugCounts = new Map<string, number>()
   while (i < len) {
     // Check for heading at line start
     if (i === 0 || md.charCodeAt(i - 1) === 10) {
@@ -308,10 +314,17 @@ export function cleanSelfLinkHeadings(md: string): string {
       }
       if (hashes >= 1 && hashes <= 6 && j < len && md.charCodeAt(j) === 32) {
         j++ // skip space
+        const lineEnd = md.indexOf('\n', j)
+        const contentEnd = lineEnd === -1 ? len : lineEnd
+        const headingText = md.slice(j, contentEnd)
+        const base = slugify(stripHeadingFormatting(headingText))
+        const count = slugCounts.get(base) || 0
+        slugCounts.set(base, count + 1)
+        const headingSlug = count === 0 ? base : `${base}-${count}`
         // Check if next char is [ (a link)
         if (j < len && md.charCodeAt(j) === 91 /* [ */) {
           const link = parseLink(md, j)
-          if (link && link.url.charCodeAt(0) === 35 /* # */) {
+          if (link && link.end === contentEnd && link.url.charCodeAt(0) === 35 /* # */ && normalizeFragment(link.url) === headingSlug) {
             // Self-linking heading → strip link, keep text
             result += md.slice(i, j) // ## prefix
             result += link.text
@@ -325,6 +338,16 @@ export function cleanSelfLinkHeadings(md: string): string {
     i++
   }
   return result
+}
+
+function normalizeFragment(fragment: string): string {
+  const value = fragment.charCodeAt(0) === 35 ? fragment.slice(1) : fragment
+  try {
+    return slugify(decodeURIComponent(value))
+  }
+  catch {
+    return slugify(value)
+  }
 }
 
 // ── Empty images ──
@@ -390,6 +413,8 @@ export function cleanEmptyLinkText(md: string): string {
 // ── Apply all ──
 
 export function applyClean(md: string, opts: CleanOptions): string {
+  if (opts.blankLines)
+    md = cleanBlankLines(md)
   if (opts.emptyImages)
     md = cleanEmptyImages(md)
   if (opts.emptyLinks)
