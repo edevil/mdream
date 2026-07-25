@@ -528,6 +528,7 @@ class ParsedElementNode implements ElementNode {
   containsWhitespace?: boolean
   declare excludedFromMarkdown?: boolean
   pluginOutput?: string[]
+  listNumber?: bigint
   context?: ElementNode['context']
   readonly tokenizerTextMode: number
   readonly inSupportedSvgContent: boolean

@@ -145,9 +145,13 @@ static TAG_HANDLERS: [Option<TagHandler>; MAX_TAG_ID] = {
 
   // Lists
   t[TAG_UL as usize] = Some(BLOCK);
-  t[TAG_OL as usize] = Some(BLOCK);
+  t[TAG_OL as usize] = Some(TagHandler {
+    needs_attributes: true,
+    ..BLOCK
+  });
   t[TAG_LI as usize] = Some(TagHandler {
     spacing: Some(LIST_ITEM_SPACING),
+    needs_attributes: true,
     ..NONE
   });
 
@@ -188,6 +192,7 @@ static TAG_HANDLERS: [Option<TagHandler>; MAX_TAG_ID] = {
   });
   t[TAG_TD as usize] = Some(TagHandler {
     collapses_inner_white_space: true,
+    needs_attributes: true,
     spacing: Some(NO_SPACING),
     ..NONE
   });

@@ -67,6 +67,13 @@ export interface MarkdownState {
   /** Table processing state - specialized for Markdown tables */
   tableRenderedTable?: boolean
   tableCurrentRowCells?: number
+  tableRowEmittedCells?: number
+  tableWidth?: number
+  tableCurrentCellStart?: number
+  tableCurrentCellColspan?: number
+  tableCurrentCellRowspan?: number
+  tableCellSuppressed?: boolean
+  tableRowspans?: Uint16Array
   tableColumnAlignments?: string[]
   /** Map of tag names to their current nesting depth */
   depthMap: Uint16Array
@@ -197,7 +204,7 @@ function updateListIndent(state: MarkdownState, element: ElementNode, eventType:
     return
   if (eventType === NodeEventEnter) {
     const isOrdered = element.parent?.tagId === TAG_OL
-    const width = state.plainText ? 0 : (isOrdered ? String(element.index + 1).length + 2 : 2)
+    const width = state.plainText ? 0 : (isOrdered ? String(element.listNumber).length + 2 : 2)
     state.listIndentWidths.push(width)
     state.listIndent += ' '.repeat(width)
   }
@@ -1555,6 +1562,16 @@ export function createMarkdownProcessor(options: EngineOptions = {}, resolvedPlu
       : node.parent?.excludedFromMarkdown
     if (inTemplate)
       return
+
+    if (state.tableCellSuppressed) {
+      if (node.type === ELEMENT_NODE
+        && eventType === NodeEventExit
+        && ((node as ElementNode).tagId === TAG_TD || (node as ElementNode).tagId === TAG_TH)
+        && (state.depthMap[TAG_TABLE] || 0) <= 1) {
+        state.tableCellSuppressed = false
+      }
+      return
+    }
 
     const lastNode = state.lastNode
     state.lastNode = event.node as ElementNode | TextNode

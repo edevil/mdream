@@ -173,6 +173,8 @@ export interface ElementNode extends Node {
   depthMap: Uint16Array
   /** Plugin outputs collected during processing */
   pluginOutput?: string[]
+  /** Internal ordered-list cursor or selected item marker. */
+  listNumber?: bigint
 }
 
 export interface TextNode extends Node {
@@ -292,6 +294,13 @@ export interface MdreamRuntimeState extends Partial<MdreamProcessingState> {
   /** Table processing state - specialized for Markdown tables */
   tableRenderedTable?: boolean
   tableCurrentRowCells?: number
+  tableRowEmittedCells?: number
+  tableWidth?: number
+  tableCurrentCellStart?: number
+  tableCurrentCellColspan?: number
+  tableCurrentCellRowspan?: number
+  tableCellSuppressed?: boolean
+  tableRowspans?: Uint16Array
   tableColumnAlignments?: string[]
 
   /** Resolved plugin instances for efficient iteration */

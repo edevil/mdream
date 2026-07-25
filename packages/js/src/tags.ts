@@ -125,6 +125,135 @@ import {
 import { continuationPrefix, getLanguageFromClass, isEmptyLinkHref, isEntityReferenceAfterAmpersand } from './utils'
 
 const TRACKING_PARAM_RE = /^(?:utm_|fbclid|gclid|mc_eid|msclkid|oly_)/
+const MAX_TABLE_COLUMNS = 256
+const MIN_LIST_NUMBER = -9223372036854775808n
+const MAX_LIST_NUMBER = 9223372036854775807n
+
+function parseListNumber(value: string | undefined): bigint | undefined {
+  if (!value)
+    return undefined
+  const negative = value.charCodeAt(0) === 45
+  let index = negative ? 1 : 0
+  if (index === value.length)
+    return undefined
+  let significantIndex = value.length
+  for (; index < value.length; index++) {
+    const code = value.charCodeAt(index)
+    if (code < 48 || code > 57)
+      return undefined
+    if (code !== 48 && significantIndex === value.length)
+      significantIndex = index
+  }
+  const digits = significantIndex === value.length ? '0' : value.slice(significantIndex)
+  if (digits.length > 19)
+    return undefined
+  const number = BigInt(negative ? `-${digits}` : digits)
+  return number >= MIN_LIST_NUMBER && number <= MAX_LIST_NUMBER ? number : undefined
+}
+
+function parseTableSpan(value: string | undefined): number {
+  if (!value)
+    return 1
+  let span = 0
+  for (let index = 0; index < value.length; index++) {
+    const code = value.charCodeAt(index)
+    if (code < 48 || code > 57)
+      return 1
+    span = span * 10 + code - 48
+    if (span >= MAX_TABLE_COLUMNS)
+      return MAX_TABLE_COLUMNS
+  }
+  return span || 1
+}
+
+function prepareTableCell(node: HandlerContext['node'], state: HandlerContext['state']): string {
+  const requestedColspan = parseTableSpan(node.attributes?.colspan)
+  const rowspan = parseTableSpan(node.attributes?.rowspan)
+  const rowspans = state.tableRowspans!
+  const limit = state.tableRenderedTable ? state.tableWidth! : MAX_TABLE_COLUMNS
+  let firstStart = -1
+  let firstRun = 0
+  let selectedStart = -1
+  let selectedSpan = 0
+  let column = state.tableCurrentRowCells!
+  while (column < limit) {
+    while (column < limit && rowspans[column])
+      column++
+    if (column === limit)
+      break
+    const start = column
+    while (column < limit && !rowspans[column])
+      column++
+    const run = column - start
+    if (firstStart < 0) {
+      firstStart = start
+      firstRun = run
+    }
+    if (run >= requestedColspan) {
+      selectedStart = start
+      selectedSpan = requestedColspan
+      break
+    }
+  }
+  if (selectedStart < 0 && firstStart >= 0) {
+    selectedStart = firstStart
+    selectedSpan = Math.min(requestedColspan, firstRun)
+  }
+  if (selectedStart < 0) {
+    state.tableCellSuppressed = true
+    return ''
+  }
+
+  const end = selectedStart + selectedSpan
+  const alignments = state.tableColumnAlignments!
+  while (alignments.length < end)
+    alignments.push('')
+  if (node.tagId === TAG_TH) {
+    const align = node.attributes?.align?.toLowerCase() || ''
+    for (let index = selectedStart; index < end; index++)
+      alignments[index] = align
+  }
+  state.tableCurrentCellStart = selectedStart
+  state.tableCurrentCellColspan = selectedSpan
+  state.tableCurrentCellRowspan = rowspan
+
+  const emitted = state.tableRowEmittedCells!
+  const separators = emitted === 0 ? selectedStart : selectedStart - emitted + 1
+  return ' | '.repeat(separators)
+}
+
+function finishTableCell(state: HandlerContext['state']): string {
+  const start = state.tableCurrentCellStart!
+  const colspan = state.tableCurrentCellColspan!
+  const end = start + colspan
+  const rowspans = state.tableRowspans!
+  for (let index = start; index < end; index++)
+    rowspans[index] = Math.max(rowspans[index]!, state.tableCurrentCellRowspan!)
+  state.tableCurrentRowCells = end
+  state.tableRowEmittedCells = end
+  return ' | '.repeat(colspan - 1)
+}
+
+function finishTableRow(state: HandlerContext['state'], width: number): string {
+  const represented = state.tableRowEmittedCells ? state.tableRowEmittedCells : Number(width > 0)
+  let output = `${' | '.repeat(Math.max(0, width - represented))} |`
+  for (let index = 0; index < width; index++)
+    state.tableRowspans![index] = Math.max(0, state.tableRowspans![index]! - 1)
+  if (!state.tableRenderedTable) {
+    state.tableRenderedTable = true
+    state.tableWidth = state.tableCurrentRowCells
+    const markers = state.tableColumnAlignments!.slice(0, width).map((align) => {
+      switch (align) {
+        case 'left': return ':---'
+        case 'center': return ':---:'
+        case 'right': return '---:'
+        default: return '---'
+      }
+    })
+    output += `\n| ${markers.join(' | ')} |`
+  }
+  return output
+}
 
 export function validateUrlPolicy(policy: unknown): asserts policy is EngineOptions['urlPolicy'] {
   if (policy !== undefined && policy !== 'preserve' && policy !== 'strict')
@@ -580,7 +709,11 @@ export const tagHandlers: Record<number, TagHandler> = {
     exit: ({ state }) => isInsideTableCell(state) ? '</ul>' : undefined,
   },
   [TAG_OL]: {
-    enter: ({ state }) => isInsideTableCell(state) ? '<ol>' : undefined,
+    enter: ({ node, state }) => {
+      if (isInsideTableCell(state))
+        return '<ol>'
+      node.listNumber = parseListNumber(node.attributes?.start) ?? 1n
+    },
     exit: ({ state }) => isInsideTableCell(state) ? '</ol>' : undefined,
   },
   [TAG_LI]: {
@@ -594,7 +727,12 @@ export const tagHandlers: Record<number, TagHandler> = {
       // is pushed onto state.listIndent after the enter output is written
       // (see markdown-processor.ts).
       const isOrdered = node.parent?.tagId === TAG_OL
-      const marker = isOrdered ? `${node.index + 1}. ` : '- '
+      if (isOrdered) {
+        const reset = parseListNumber(node.attributes?.value)
+        node.listNumber = reset ?? node.parent!.listNumber ?? 1n
+        node.parent!.listNumber = node.listNumber + 1n
+      }
+      const marker = isOrdered ? `${node.listNumber}. ` : '- '
       return `${state.listIndent}${marker}`
     },
     exit: ({ state }) => isInsideTableCell(state) ? '</li>' : undefined,
@@ -674,9 +812,13 @@ export const tagHandlers: Record<number, TagHandler> = {
       }
       if ((state.depthMap?.[TAG_TABLE] || 0) <= 1) {
         state.tableRenderedTable = false
+        state.tableWidth = 0
+        state.tableCurrentRowCells = 0
+        state.tableRowEmittedCells = 0
+        state.tableCellSuppressed = false
+        state.tableRowspans = new Uint16Array(MAX_TABLE_COLUMNS)
+        state.tableColumnAlignments = []
       }
-      // Initialize table state
-      state.tableColumnAlignments = []
     },
     exit: ({ state }) => isInsideTableCell(state) ? '</table>' : undefined,
   },
@@ -696,6 +838,7 @@ export const tagHandlers: Record<number, TagHandler> = {
         return '<tr>'
       }
       state.tableCurrentRowCells = 0
+      state.tableRowEmittedCells = 0
       return '| '
     },
     exit: ({ state }) => {
@@ -703,30 +846,8 @@ export const tagHandlers: Record<number, TagHandler> = {
         return '</tr>'
       }
 
-      // Handle header row separator
-      if (!state.tableRenderedTable) {
-        state.tableRenderedTable = true
-
-        // Ensure we have alignments for all columns
-        const alignments = state.tableColumnAlignments!
-        while (alignments.length < state.tableCurrentRowCells!) {
-          alignments.push('')
-        }
-
-        // Map alignment values to markdown syntax
-        const alignmentMarkers = alignments.map((align) => {
-          switch (align) {
-            case 'left': return ':---'
-            case 'center': return ':---:'
-            case 'right': return '---:'
-            default: return '---'
-          }
-        })
-
-        return ` |\n| ${alignmentMarkers.join(' | ')} |`
-      }
-
-      return ' |'
+      const width = state.tableRenderedTable ? state.tableWidth! : state.tableCurrentRowCells!
+      return finishTableRow(state, width)
     },
     excludesTextNodes: true,
     spacing: TABLE_ROW_SPACING,
@@ -737,22 +858,13 @@ export const tagHandlers: Record<number, TagHandler> = {
         return '<th>'
       }
 
-      // Handle alignment
-      const align = node.attributes?.align?.toLowerCase()
-      if (align) {
-        state.tableColumnAlignments!.push(align)
-      }
-      else if (state.tableColumnAlignments!.length <= state.tableCurrentRowCells!) {
-        state.tableColumnAlignments!.push('')
-      }
-
-      return node.index === 0 ? '' : ' | '
+      return prepareTableCell(node, state)
     },
     exit: ({ state }) => {
       if ((state.depthMap?.[TAG_TABLE] || 0) > 1) {
         return '</th>'
       }
-      state.tableCurrentRowCells!++
+      return finishTableCell(state)
     },
     collapsesInnerWhiteSpace: true,
     spacing: NO_SPACING,
@@ -762,13 +874,13 @@ export const tagHandlers: Record<number, TagHandler> = {
       if ((state.depthMap?.[TAG_TABLE] || 0) > 1) {
         return '<td>'
       }
-      return node.index === 0 ? '' : ' | '
+      return prepareTableCell(node, state)
     },
     exit: ({ state }) => {
       if ((state.depthMap?.[TAG_TABLE] || 0) > 1) {
         return '</td>'
       }
-      state.tableCurrentRowCells!++
+      return finishTableCell(state)
     },
     collapsesInnerWhiteSpace: true,
     spacing: NO_SPACING,

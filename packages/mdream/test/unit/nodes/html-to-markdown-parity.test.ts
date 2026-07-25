@@ -102,7 +102,7 @@ describe.each(engines)('html-to-markdown parity $name', (engineConfig) => {
       <li>Nested</li>
     </ul>
   </li>
-</ol>`, { engine })).toBe('1. Nine\n2. Ten\n3. Eleven\n   - Nested')
+</ol>`, { engine })).toBe('9. Nine\n10. Ten\n11. Eleven\n    - Nested')
   })
   it('blockquote: Blockquotes can include other elements, with seamless support for nested quotes.', async () => {
     const engine = await resolveEngine(engineConfig.engine)

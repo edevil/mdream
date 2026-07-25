@@ -2,6 +2,32 @@
 
 use super::*;
 
+fn parse_list_number(value: Option<&String>) -> Option<i128> {
+  let value = value?;
+  let digits = value.strip_prefix('-').unwrap_or(value);
+  if digits.is_empty() || !digits.bytes().all(|byte| byte.is_ascii_digit()) {
+    return None;
+  }
+  value.parse::<i64>().ok().map(i128::from)
+}
+
+fn parse_table_span(value: Option<&String>) -> usize {
+  let Some(value) = value.filter(|value| !value.is_empty()) else {
+    return 1;
+  };
+  let mut span = 0usize;
+  for byte in value.bytes() {
+    if !byte.is_ascii_digit() {
+      return 1;
+    }
+    span = span * 10 + (byte - b'0') as usize;
+    if span >= MAX_TABLE_COLUMNS {
+      return MAX_TABLE_COLUMNS;
+    }
+  }
+  span.max(1)
+}
+
 const DESTINATION_ESCAPES: [u8; 16] = [0, 0, 0, 0, 0, 0, 0, 80, 0, 0, 0, 16, 0, 0, 0, 0];
 const TITLE_ESCAPES: [u8; 16] = [0, 0, 0, 0, 4, 0, 0, 0, 0, 0, 0, 16, 0, 0, 0, 0];
 const IMAGE_DESCRIPTION_ESCAPES: [u8; 16] = [0, 0, 0, 0, 64, 4, 0, 16, 0, 0, 0, 184, 1, 0, 0, 64];
@@ -445,6 +471,118 @@ impl ConvertState {
     self.last_content_start = Some(flush_end);
   }
 
+  fn prepare_table_cell(&mut self) {
+    let node = &self.stack[self.stack.len() - 1];
+    let is_header = node.tag_id == Some(TAG_TH);
+    let requested_colspan = parse_table_span(node.attributes.get("colspan"));
+    let rowspan = parse_table_span(node.attributes.get("rowspan"));
+    let alignment = if node.tag_id == Some(TAG_TH) {
+      node.attributes.get("align").map_or(0u8, |value| {
+        match value.as_bytes().first().copied().unwrap_or(0) | 0x20 {
+          b'l' => 1,
+          b'c' => 2,
+          b'r' => 3,
+          _ => 0,
+        }
+      })
+    } else {
+      0
+    };
+    let limit = if self.table_rendered_table {
+      self.table_width
+    } else {
+      MAX_TABLE_COLUMNS
+    };
+
+    let mut first_run = None;
+    let mut selected = None;
+    let mut column = self.table_current_row_cells;
+    while column < limit {
+      while column < limit && self.table_rowspans[column] != 0 {
+        column += 1;
+      }
+      if column == limit {
+        break;
+      }
+      let start = column;
+      while column < limit && self.table_rowspans[column] == 0 {
+        column += 1;
+      }
+      let run = column - start;
+      first_run.get_or_insert((start, run));
+      if run >= requested_colspan {
+        selected = Some((start, requested_colspan));
+        break;
+      }
+    }
+    let Some((start, colspan)) =
+      selected.or(first_run.map(|(start, run)| (start, requested_colspan.min(run))))
+    else {
+      if self.streaming_limit.is_some() {
+        self.fail_streaming(StreamingError::ParserLimitExceeded);
+      }
+      self.table_cell_suppressed = true;
+      return;
+    };
+
+    let end = start + colspan;
+    while self.table_column_alignments.len() < end {
+      if !self.push_table_alignment(0) {
+        self.table_cell_suppressed = true;
+        return;
+      }
+    }
+    if is_header {
+      for value in &mut self.table_column_alignments[start..end] {
+        *value = alignment;
+      }
+    }
+    self.table_current_cell_start = start;
+    self.table_current_cell_colspan = colspan;
+    self.table_current_cell_rowspan = rowspan;
+  }
+
+  fn finish_table_cell(&mut self) {
+    let start = self.table_current_cell_start;
+    let end = start + self.table_current_cell_colspan;
+    let rowspan = self.table_current_cell_rowspan as u16;
+    for value in &mut self.table_rowspans[start..end] {
+      *value = (*value).max(rowspan);
+    }
+    self.table_current_row_cells = end;
+    self.table_row_emitted_cells = end;
+  }
+
+  fn table_cell_prefix(&self) -> String {
+    let separators = if self.table_row_emitted_cells == 0 {
+      self.table_current_cell_start
+    } else {
+      self
+        .table_current_cell_start
+        .saturating_sub(self.table_row_emitted_cells)
+        + 1
+    };
+    " | ".repeat(separators)
+  }
+
+  fn finish_table_row(&mut self, width: usize) -> String {
+    let represented = if self.table_row_emitted_cells == 0 {
+      usize::from(width > 0)
+    } else {
+      self.table_row_emitted_cells
+    };
+    let missing = width.saturating_sub(represented);
+    let mut output = String::with_capacity(missing * 3 + 2);
+    for _ in 0..missing {
+      output.push_str(" | ");
+    }
+    output.push_str(" |");
+    for value in &mut self.table_rowspans[..width] {
+      *value = value.saturating_sub(1);
+    }
+    output
+  }
+
   /// Emit markdown for entering the element currently on top of self.stack.
   #[inline]
   pub(crate) fn emit_enter_element(&mut self) {
@@ -458,6 +596,47 @@ impl ConvertState {
     // deferred <pre> handling so an inert subtree cannot mutate output state.
     if self.stack[stack_len - 1].excluded_from_markdown {
       self.last_node_is_inline = self.stack[stack_len - 1].is_inline;
+      return;
+    }
+
+    let current_tag = self.stack[stack_len - 1].tag_id;
+    if !self.plain_text {
+      if current_tag == Some(TAG_OL) {
+        self.stack[stack_len - 1].list_number =
+          parse_list_number(self.stack[stack_len - 1].attributes.get("start")).unwrap_or(1);
+      } else if current_tag == Some(TAG_LI)
+        && stack_len >= 2
+        && self.stack[stack_len - 2].tag_id == Some(TAG_OL)
+      {
+        let reset = parse_list_number(self.stack[stack_len - 1].attributes.get("value"));
+        let marker = reset.unwrap_or(self.stack[stack_len - 2].list_number);
+        self.stack[stack_len - 1].list_number = marker;
+        self.stack[stack_len - 2].list_number = marker.saturating_add(1);
+      }
+
+      if current_tag == Some(TAG_TABLE) && self.depth_map[TAG_TABLE as usize] <= 1 {
+        self.table_rendered_table = false;
+        self.table_width = 0;
+        self.table_current_row_cells = 0;
+        self.table_row_emitted_cells = 0;
+        self.table_cell_suppressed = false;
+        self.table_rowspans.fill(0);
+        if self.table_column_alignments.capacity() > MAX_POOLED_TABLE_COLUMNS {
+          self.table_column_alignments = Vec::new();
+        } else {
+          self.table_column_alignments.clear();
+        }
+      } else if current_tag == Some(TAG_TR) && self.depth_map[TAG_TABLE as usize] <= 1 {
+        self.table_current_row_cells = 0;
+        self.table_row_emitted_cells = 0;
+      } else if matches!(current_tag, Some(TAG_TH | TAG_TD))
+        && self.depth_map[TAG_TABLE as usize] <= 1
+      {
+        self.prepare_table_cell();
+      }
+    }
+
+    if self.table_cell_suppressed {
       return;
     }
 
@@ -496,7 +675,6 @@ impl ConvertState {
     let is_inline: bool;
     let node_spacing: Option<[u8; 2]>;
     let mut output: Option<Cow<'static, str>>;
-    let mut table_alignment = None;
     // True when `output` is a user-supplied override enter string — emit it
     // verbatim without synthesizing a separating space (issue #93).
     let enter_is_literal: bool;
@@ -522,34 +700,6 @@ impl ConvertState {
         .unwrap_or(node.is_inline);
       node_spacing = override_config.and_then(|ov| ov.spacing).or(node.spacing);
 
-      // Table state reads (tag_id.is_some() is sufficient — all table tags have handlers)
-      if tag_id.is_some() {
-        if tag_id == Some(TAG_TABLE) {
-          if self.depth_map[TAG_TABLE as usize] <= 1 {
-            self.table_rendered_table = false;
-          }
-          if self.table_column_alignments.capacity() > MAX_POOLED_TABLE_COLUMNS {
-            self.table_column_alignments = Vec::new();
-          } else {
-            self.table_column_alignments.clear();
-          }
-        } else if tag_id == Some(TAG_TR) {
-          self.table_current_row_cells = 0;
-        } else if tag_id == Some(TAG_TH) {
-          let align_val = node.attributes.get("align").map_or(0u8, |s| {
-            match s.as_bytes().first().copied().unwrap_or(0) | 0x20 {
-              b'l' => 1, // left
-              b'c' => 2, // center
-              b'r' => 3, // right
-              _ => 0,
-            }
-          });
-          if align_val != 0 || self.table_column_alignments.len() <= self.table_current_row_cells {
-            table_alignment = Some(align_val);
-          }
-        }
-      }
-
       // Check override enter string
       output = if let Some(ov) = override_config {
         if let Some(ref s) = ov.enter {
@@ -565,13 +715,6 @@ impl ConvertState {
       };
     }
     // Phase 1 ends — self.stack borrow released
-    if let Some(alignment) = table_alignment
-      && !self.push_table_alignment(alignment)
-      && self.streaming_error.is_some()
-    {
-      return;
-    }
-
     // Phase 2: calculate new lines + write buffer
     let new_line_config = self.calculate_new_line_config(tag_id, node_spacing);
     let quote_at_start = self
@@ -751,6 +894,12 @@ impl ConvertState {
   #[inline]
   pub(crate) fn emit_exit_element(&mut self, node: &ElementNode) {
     self.text_run_generation = self.text_run_generation.wrapping_add(1);
+    if self.table_cell_suppressed {
+      if matches!(node.tag_id, Some(TAG_TH | TAG_TD)) && self.depth_map[TAG_TABLE as usize] <= 1 {
+        self.table_cell_suppressed = false;
+      }
+      return;
+    }
     if node.excluded_from_markdown {
       self.last_node_is_inline = node.is_inline;
       return;
@@ -759,12 +908,8 @@ impl ConvertState {
     let tag_id = node.tag_id;
     let closes_own_pre_fence = tag_id == Some(TAG_PRE) && self.pre_own_fence;
 
-    if (tag_id == Some(TAG_TH) || tag_id == Some(TAG_TD))
-      && self.depth_map[TAG_TABLE as usize] <= 1
-      && !self.increment_table_cells()
-      && self.streaming_error.is_some()
-    {
-      return;
+    if matches!(tag_id, Some(TAG_TH | TAG_TD)) && self.depth_map[TAG_TABLE as usize] <= 1 {
+      self.finish_table_cell();
     }
 
     // Check override
@@ -774,12 +919,18 @@ impl ConvertState {
         .plugins
         .as_ref()
         .and_then(|p| p.tag_overrides.as_ref())
-        .and_then(|ovs| ovs.iter().find(|(k, _)| k == node.name()).map(|(_, v)| v))
+        .and_then(|ovs| {
+          ovs
+            .iter()
+            .find(|(k, _)| k == node.name())
+            .map(|(_, v)| v.clone())
+        })
     } else {
       None
     };
 
     let is_inline = override_config
+      .as_ref()
       .and_then(|ov| ov.is_inline)
       .unwrap_or(node.is_inline);
 
@@ -787,7 +938,7 @@ impl ConvertState {
     let mut table_separator: Option<String> = None;
 
     // Check override exit string
-    let has_override = if let Some(ov) = override_config {
+    let has_override = if let Some(ref ov) = override_config {
       if let Some(ref s) = ov.exit {
         output = Some(Cow::Owned(s.clone()));
         true
@@ -800,15 +951,15 @@ impl ConvertState {
 
     if !has_override {
       // Special case: TR table separator
-      if tag_id == Some(TAG_TR) && !self.plain_text {
-        if !self.table_rendered_table && self.depth_map[TAG_TABLE as usize] <= 1 {
+      if tag_id == Some(TAG_TR) && !self.plain_text && self.depth_map[TAG_TABLE as usize] <= 1 {
+        if !self.table_rendered_table {
           self.table_rendered_table = true;
-          let col_count = self
-            .table_current_row_cells
-            .max(self.table_column_alignments.len())
-            .min(MAX_TABLE_COLUMNS);
-          let mut sep = String::with_capacity(col_count * 7 + 5);
-          sep.push_str(" |\n|");
+          self.table_width = self.table_current_row_cells.min(MAX_TABLE_COLUMNS);
+          let col_count = self.table_width;
+          let row_end = self.finish_table_row(col_count);
+          let mut sep = String::with_capacity(row_end.len() + col_count * 7 + 2);
+          sep.push_str(&row_end);
+          sep.push_str("\n|");
           for i in 0..col_count {
             let align = self.table_column_alignments.get(i).copied().unwrap_or(0);
             sep.push(' ');
@@ -822,7 +973,7 @@ impl ConvertState {
           }
           table_separator = Some(sep);
         } else {
-          output = self.get_exit_output(node);
+          output = Some(Cow::Owned(self.finish_table_row(self.table_width)));
         }
       } else if self.plain_text || tag_id != Some(TAG_A) {
         output = self.get_exit_output(node);
@@ -838,7 +989,7 @@ impl ConvertState {
       None
     };
 
-    let node_spacing = if let Some(ov) = override_config {
+    let node_spacing = if let Some(ref ov) = override_config {
       ov.spacing.or(node.spacing)
     } else {
       node.spacing
@@ -1220,6 +1371,9 @@ impl ConvertState {
     generated_prefix: Option<&str>,
     generated_suffix: Option<&str>,
   ) {
+    if self.table_cell_suppressed {
+      return;
+    }
     let has_inline_gfm_hazard = std::mem::take(&mut self.text_buffer_has_inline_gfm_hazard);
     if text.is_empty() {
       return;
@@ -1989,7 +2143,7 @@ impl ConvertState {
         s.push_str(&self.list_indent);
         if is_ordered {
           use std::fmt::Write;
-          let _ = write!(s, "{}. ", node.index + 1);
+          let _ = write!(s, "{}. ", node.list_number);
         } else {
           s.push_str("- ");
         }
@@ -2052,21 +2206,13 @@ impl ConvertState {
         if self.depth_map[TAG_TABLE as usize] > 1 {
           return Some(Cow::Borrowed("<th>"));
         }
-        if node.index == 0 {
-          Some(Cow::Borrowed(""))
-        } else {
-          Some(Cow::Borrowed(" | "))
-        }
+        Some(Cow::Owned(self.table_cell_prefix()))
       }
       TAG_TD => {
         if self.depth_map[TAG_TABLE as usize] > 1 {
           return Some(Cow::Borrowed("<td>"));
         }
-        if node.index == 0 {
-          Some(Cow::Borrowed(""))
-        } else {
-          Some(Cow::Borrowed(" | "))
-        }
+        Some(Cow::Owned(self.table_cell_prefix()))
       }
       TAG_CENTER => {
         if self.depth_map[TAG_TABLE as usize] > 1 {
@@ -2232,14 +2378,18 @@ impl ConvertState {
         if self.depth_map[TAG_TABLE as usize] > 1 {
           Some(Cow::Borrowed("</th>"))
         } else {
-          None
+          Some(Cow::Owned(
+            " | ".repeat(self.table_current_cell_colspan.saturating_sub(1)),
+          ))
         }
       }
       TAG_TD => {
         if self.depth_map[TAG_TABLE as usize] > 1 {
           Some(Cow::Borrowed("</td>"))
         } else {
-          None
+          Some(Cow::Owned(
+            " | ".repeat(self.table_current_cell_colspan.saturating_sub(1)),
+          ))
         }
       }
       TAG_CENTER => {

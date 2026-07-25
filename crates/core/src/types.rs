@@ -181,6 +181,7 @@ pub struct ElementNode {
   pub index: usize,
   pub current_walk_index: usize,
   pub child_text_node_index: usize,
+  pub list_number: i128,
   // Small fields grouped to minimize padding
   pub tag_id: Option<u8>,
   pub contains_whitespace: bool,

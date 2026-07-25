@@ -372,6 +372,8 @@ const markdown = htmlToMarkdown(html, {
 
 **Output is GitHub Flavored Markdown.** Mdream emits a fixed GFM dialect tuned for LLM input: ATX headings (`#`), fenced code blocks (` ``` `), `-` bullets, `_` emphasis, `**` strong, `---` horizontal rules, inline links. These are not configurable. For simple delimiter swaps you can use `tagOverrides`:
 
+Ordered lists preserve valid signed 64-bit `start` and `value` attributes; malformed or out-of-range values continue normal numbering. GFM has no table-span syntax, so `colspan` and `rowspan` expand into explicit empty cells in a logical grid. The first row fixes the rectangular width, span values are capped at 256 columns/rows, invalid spans occupy one cell, and cells that cannot fit are omitted rather than shifted into an incorrect column. Rust and JavaScript use the same policy.
+
 ```ts
 htmlToMarkdown(html, {
   tagOverrides: {

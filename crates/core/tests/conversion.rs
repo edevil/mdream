@@ -1348,6 +1348,20 @@ fn table_with_formatting() {
   assert!(md.contains("[link](https://example.com)"));
 }
 
+#[test]
+fn ordered_list_values_and_table_spans_are_preserved() {
+  assert_eq!(
+    convert("<ol start=\"5\"><li>A</li><li value=\"-2\">B</li><li>C</li></ol>"),
+    "5. A\n-2. B\n-1. C"
+  );
+  assert_eq!(
+    convert(
+      "<table><tr><th rowspan=\"2\">A</th><th colspan=\"2\">B</th></tr><tr><td>C</td><td>D</td></tr></table>"
+    ),
+    "| A | B | |\n| --- | --- | --- |\n|  | C | D |"
+  );
+}
+
 // ── Code blocks ──
 
 #[test]

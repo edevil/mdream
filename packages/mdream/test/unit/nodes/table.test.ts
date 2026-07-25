@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { engines, htmlToMarkdown, resolveEngine, streamHtmlToMarkdown } from '../../utils/engines'
+import { parseMarkdown } from '../../utils/markdown'
 
 describe.each(engines)('tables $name', (engineConfig) => {
   it('does not double escape protected cell pipes', async () => {
@@ -156,10 +157,73 @@ describe.each(engines)('tables $name', (engineConfig) => {
     `
     const markdown = htmlToMarkdown(html, { engine })
     expect(markdown).toBe(
-      '| Header 1 | Header 2-3 |\n'
-      + '| --- | --- |\n'
+      '| Header 1 | Header 2-3 | |\n'
+      + '| --- | --- | --- |\n'
       + '| Value 1 | Value 2 | Value 3 |',
     )
+  })
+
+  it('expands row and column spans into a rectangular GFM grid', async () => {
+    const engine = await resolveEngine(engineConfig.engine)
+    const html = '<table><tr><th rowspan="2">A</th><th colspan="2">B</th></tr><tr><td>C</td><td>D</td></tr></table>'
+    const markdown = htmlToMarkdown(html, { engine })
+    expect(markdown).toBe('| A | B | |\n| --- | --- | --- |\n|  | C | D |')
+
+    const table = parseMarkdown(markdown).children[0] as any
+    expect(table.type).toBe('table')
+    expect(table.children.map((row: any) => row.children.length)).toEqual([3, 3])
+    expect(table.children[1].children.map((cell: any) => cell.children[0]?.value || ''))
+      .toEqual(['', 'C', 'D'])
+  })
+
+  it('resolves overlapping spans without shifting later cells', async () => {
+    const engine = await resolveEngine(engineConfig.engine)
+    const html = '<table><tr><th>A</th><th rowspan="2">B</th><th>C</th></tr><tr><td colspan="2">D</td><td>E</td></tr></table>'
+    const markdown = htmlToMarkdown(html, { engine })
+    expect(markdown).toBe('| A | B | C |\n| --- | --- | --- |\n| D |  | E |')
+    const table = parseMarkdown(markdown).children[0] as any
+    expect(table.children[1].children.map((cell: any) => cell.children[0]?.value || ''))
+      .toEqual(['D', '', 'E'])
+  })
+
+  it('treats malformed, zero, and negative spans as one', async () => {
+    const engine = await resolveEngine(engineConfig.engine)
+    const html = '<table><tr><th colspan="0">A</th><th colspan="-2">B</th><th rowspan="wat">C</th></tr><tr><td>D</td><td>E</td><td>F</td></tr></table>'
+    expect(htmlToMarkdown(html, { engine })).toBe(
+      '| A | B | C |\n| --- | --- | --- |\n| D | E | F |',
+    )
+  })
+
+  it('clamps spans to the 256-column table cap', async () => {
+    const engine = await resolveEngine(engineConfig.engine)
+    const markdown = htmlToMarkdown('<table><tr><th colspan="999999999999999999999">A</th></tr><tr><td>B</td></tr></table>', { engine })
+    const table = parseMarkdown(markdown).children[0] as any
+    expect(table.children.map((row: any) => row.children.length)).toEqual([256, 256])
+    expect(markdown.length).toBeLessThan(4000)
+  })
+
+  it('suppresses cells beyond the first-row grid instead of shifting content', async () => {
+    const engine = await resolveEngine(engineConfig.engine)
+    const html = '<table><tr><th>A</th><th>B</th></tr><tr><td>C</td><td>D</td><td>must-not-shift</td></tr><tr><td>E</td></tr></table>'
+    expect(htmlToMarkdown(html, { engine })).toBe(
+      '| A | B |\n| --- | --- |\n| C | D |\n| E |  |',
+    )
+  })
+
+  it('streams spanned tables with one-shot parity', async () => {
+    const engine = await resolveEngine(engineConfig.engine)
+    const html = '<table><tr><th rowspan="2">A</th><th colspan="2">B</th></tr><tr><td>C</td><td>D</td></tr></table>'
+    const stream = new ReadableStream({
+      start(controller) {
+        for (let index = 0; index < html.length; index += 3)
+          controller.enqueue(html.slice(index, index + 3))
+        controller.close()
+      },
+    })
+    let streamed = ''
+    for await (const chunk of streamHtmlToMarkdown(stream, { engine }))
+      streamed += chunk
+    expect(streamed.trim()).toBe(htmlToMarkdown(html, { engine }))
   })
   it('handles large tables without stack overflow', async () => {
     const engine = await resolveEngine(engineConfig.engine)

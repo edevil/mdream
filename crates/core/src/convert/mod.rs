@@ -607,6 +607,13 @@ pub struct ConvertState {
   last_content_start: Option<usize>,
   table_rendered_table: bool,
   table_current_row_cells: usize,
+  table_row_emitted_cells: usize,
+  table_width: usize,
+  table_current_cell_start: usize,
+  table_current_cell_colspan: usize,
+  table_current_cell_rowspan: usize,
+  table_cell_suppressed: bool,
+  table_rowspans: [u16; MAX_TABLE_COLUMNS],
   // 0=none, 1=left, 2=center, 3=right
   table_column_alignments: Vec<u8>,
   last_text_node_contains_whitespace: bool,
@@ -867,6 +874,13 @@ impl ConvertState {
       last_content_start: None,
       table_rendered_table: false,
       table_current_row_cells: 0,
+      table_row_emitted_cells: 0,
+      table_width: 0,
+      table_current_cell_start: 0,
+      table_current_cell_colspan: 1,
+      table_current_cell_rowspan: 1,
+      table_cell_suppressed: false,
+      table_rowspans: [0; MAX_TABLE_COLUMNS],
       table_column_alignments: Vec::new(),
       last_text_node_contains_whitespace: false,
       last_text_node_depth: 0,
@@ -1402,17 +1416,6 @@ impl ConvertState {
       }
     }
     self.table_column_alignments.push(alignment);
-    true
-  }
-
-  pub(crate) fn increment_table_cells(&mut self) -> bool {
-    if self.table_current_row_cells >= MAX_TABLE_COLUMNS {
-      if self.streaming_limit.is_some() {
-        self.fail_streaming(StreamingError::ParserLimitExceeded);
-      }
-      return false;
-    }
-    self.table_current_row_cells += 1;
     true
   }
 

@@ -919,6 +919,7 @@ impl ConvertState {
       pooled.index = current_walk_index;
       pooled.current_walk_index = 0;
       pooled.child_text_node_index = 0;
+      pooled.list_number = 0;
       pooled.contains_whitespace = false;
       pooled.excluded_from_markdown = false;
       pooled.tailwind = None;
@@ -937,6 +938,7 @@ impl ConvertState {
         index: current_walk_index,
         current_walk_index: 0,
         child_text_node_index: 0,
+        list_number: 0,
         contains_whitespace: false,
         excluded_from_markdown: false,
         tailwind: None,
@@ -1229,10 +1231,7 @@ impl ConvertState {
         let stack_len = self.stack.len();
         let parent_is_ordered = stack_len >= 2 && self.stack[stack_len - 2].tag_id == Some(TAG_OL);
         if parent_is_ordered {
-          let n = li.index + 1;
-          // n >= 1 so ilog10 never panics; +1 converts floor(log10) to digit count.
-          let digits = (n.ilog10() + 1) as usize;
-          digits + 2
+          li.list_number.to_string().len() + 2
         } else {
           2
         }

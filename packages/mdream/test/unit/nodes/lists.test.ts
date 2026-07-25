@@ -16,6 +16,30 @@ describe.each(engines)('lists $name', (engineConfig) => {
     expect(markdown).toBe('1. First\n2. Second')
   })
 
+  it('preserves ordered list starts and item resets', async () => {
+    const engine = await resolveEngine(engineConfig.engine)
+    const html = '<ol start="5"><li>A</li><li value="9">B</li><li>C</li><li value="0">D</li><li>E</li><li value="-3">F</li><li>G</li></ol>'
+    expect(htmlToMarkdown(html, { engine })).toBe('5. A\n9. B\n10. C\n0. D\n1. E\n-3. F\n-2. G')
+  })
+
+  it('falls back for malformed and out-of-range list values', async () => {
+    const engine = await resolveEngine(engineConfig.engine)
+    expect(htmlToMarkdown('<ol start="0"><li>A</li></ol><ol start="-4"><li>B</li></ol><ol start="2147483647"><li>C</li></ol>', { engine }))
+      .toBe('0. A\n\n-4. B\n\n2147483647. C')
+    expect(htmlToMarkdown('<ol start="+7"><li>A</li><li value="2x">B</li><li>C</li></ol>', { engine }))
+      .toBe('1. A\n2. B\n3. C')
+    expect(htmlToMarkdown('<ol start="9223372036854775808"><li>A</li><li value="9223372036854775807">B</li><li>C</li></ol>', { engine }))
+      .toBe('1. A\n9223372036854775807. B\n9223372036854775808. C')
+    expect(htmlToMarkdown(`<ol start="${'0'.repeat(1000)}7"><li>A</li></ol><ol start="${'9'.repeat(1000)}"><li>B</li></ol>`, { engine }))
+      .toBe('7. A\n\n1. B')
+  })
+
+  it('keeps nested ordered list counters independent', async () => {
+    const engine = await resolveEngine(engineConfig.engine)
+    const html = '<ol start="4"><li>outer<ol start="-2"><li>inner</li><li value="7">reset</li><li>next</li></ol></li><li>tail</li></ol>'
+    expect(htmlToMarkdown(html, { engine })).toBe('4. outer\n   -2. inner\n   7. reset\n   8. next\n5. tail')
+  })
+
   it('handles nested unordered lists', async () => {
     const engine = await resolveEngine(engineConfig.engine)
     const html = '<ul><li>Level 1<ul><li>Level 2</li></ul></li><li>Another Level 1</li></ul>'
