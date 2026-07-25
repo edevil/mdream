@@ -1,0 +1,63 @@
+crates/core/src/lib.rs
+  s_ee794b8f5c67db::t_824aa5e739829e 372-375,382-507,510-518,523-531,539-547,550-558,563-585,594,627,635-639,642-643,650,654-669,692-696,707-711,744-750,753-757
+crates/core/src/types.rs
+  s_ee794b8f5c67db::t_8efbfd3c3570ea 429,434-446,772,777-822,827,840
+crates/core/src/convert/parse.rs
+  s_ee794b8f5c67db::t_94e8385220ce03 635-664,703,709,713-718,888-912,1058,1071
+crates/node/src/lib.rs
+  s_4d4c54b2ba8f31::t_852a2750fcb515 115,148-211,238,240-252,302-303,318-319,336-337
+crates/edge/src/lib.rs
+  s_ee794b8f5c67db::t_8bd0439a921646 31-36,39-52,54,56,134,157,208-260,263,270,278-279,285-286,331-332
+packages/js/src/parse.ts
+  s_88b31c4ca4d792::t_a1134186ffc844 1434-1435,1782-1783
+crates/core/tests/option_validation.rs
+  s_ee794b8f5c67db::t_a45e4625917c1a 1-200
+packages/mdream/test/unit/option-validation.test.ts
+  s_4d4c54b2ba8f31::t_5232af266287f2 1-69
+crates/core/fuzz/fuzz_targets/fuzz_options.rs
+  s_ee794b8f5c67db::t_550c977118892e 4,27-35,91-103,110,122-123
+crates/core/src/convert/mod.rs
+  s_ee794b8f5c67db::t_53ffb581feae00 589,846
+packages/js/src/core.ts
+  s_ee794b8f5c67db::t_e6207e71622522 4,34,50
+packages/js/src/index.ts
+  s_ee794b8f5c67db::t_5693fcab42b358 6,29,41,53
+packages/js/src/plugins/isolate-main.ts
+  s_ee794b8f5c67db::t_9e522012d3cb18 37,44,59-63,106
+packages/js/src/tags.ts
+  s_ee794b8f5c67db::t_ed9f4309581c2c 1139,1141,1144-1149,1153-1155,1182,1188-1238
+packages/js/test/unit/option-validation.test.ts
+  s_ee794b8f5c67db::t_742f5961e8a1b9 1-93
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "931a815b5ce7ab21a5436c2982e60fda9015d1ef",
+  "prompts": {},
+  "sessions": {
+    "s_4d4c54b2ba8f31": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_06570136fffejL1DhpbVN4NROl",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "André Cruz <acruz@cloudflare.com>"
+    },
+    "s_88b31c4ca4d792": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_065701452ffewnRbH6YipobQCs",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "André Cruz <acruz@cloudflare.com>"
+    },
+    "s_ee794b8f5c67db": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_065701446ffeeblDCLy57rl0li",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "André Cruz <acruz@cloudflare.com>"
+    }
+  }
+}
