@@ -10,6 +10,11 @@ describe('htmlToMarkdown resolve options', () => {
       .toThrow('Custom hook plugins require @mdream/js')
   })
 
+  it('rejects an invalid URL policy before calling the native binding', () => {
+    expect(() => htmlToMarkdown('<p>test</p>', { urlPolicy: 'invalid' } as any))
+      .toThrow('Invalid urlPolicy: invalid')
+  })
+
   it('minimal enables frontmatter, isolateMain, tailwind, filter', () => {
     const html = '<!DOCTYPE html><html><head><title>Edge Options</title></head><body><div>Outside chrome</div><main><nav>Inside nav</nav><h1>Real Content</h1><p><a href="#">Empty link</a></p></main><footer>Footer junk</footer></body></html>'
     const md = htmlToMarkdown(html, {

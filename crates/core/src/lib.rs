@@ -371,7 +371,7 @@ mod carry_scanner_tests {
 pub use types::{
   CleanConfig, ExtractionConfig, FilterConfig, FrontmatterConfig, HTMLToMarkdownOptions,
   IsolateMainConfig, MdreamResult, OutputFormat, PluginConfig, StreamingError, StreamingLimits,
-  TagOverrideConfig, TailwindConfig, UnsupportedStreamingOption,
+  TagOverrideConfig, TailwindConfig, UnsupportedStreamingOption, UrlPolicy,
 };
 
 // Re-export `get_tag_id` so callers can resolve tag names to IDs (for

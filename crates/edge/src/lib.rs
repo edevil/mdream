@@ -88,20 +88,30 @@ fn parse_clean(v: &JsValue) -> Option<mdream::types::CleanConfig> {
 
 fn parse_options(
   options: &JsValue,
-) -> (
-  mdream::types::HTMLToMarkdownOptions,
-  mdream::types::OutputFormat,
-) {
+) -> Result<
+  (
+    mdream::types::HTMLToMarkdownOptions,
+    mdream::types::OutputFormat,
+  ),
+  JsValue,
+> {
   if options.is_undefined() || options.is_null() {
-    return (
+    return Ok((
       mdream::types::HTMLToMarkdownOptions::default(),
       mdream::types::OutputFormat::Markdown,
-    );
+    ));
   }
 
   let origin = as_string(&get_prop(options, "origin"));
   let clean_urls = as_bool(&get_prop(options, "cleanUrls")).unwrap_or(false);
   let clean = parse_clean(&get_prop(options, "clean"));
+  let url_policy = match as_string(&get_prop(options, "urlPolicy")).as_deref() {
+    None | Some("preserve") => mdream::types::UrlPolicy::Preserve,
+    Some("strict") => mdream::types::UrlPolicy::Strict,
+    Some(value) => {
+      return Err(js_sys::TypeError::new(&format!("Invalid urlPolicy: {value}")).into());
+    }
+  };
 
   let plugins_val = get_prop(options, "plugins");
   let plugins = if plugins_val.is_undefined() || plugins_val.is_null() {
@@ -121,12 +131,13 @@ fn parse_options(
 
   let core_options = mdream::types::HTMLToMarkdownOptions {
     origin,
+    url_policy,
     clean_urls,
     clean,
     plugins,
     wrap_width,
   };
-  (core_options, format)
+  Ok((core_options, format))
 }
 
 fn parse_plugins(p: &JsValue) -> mdream::types::PluginConfig {
@@ -221,14 +232,14 @@ fn parse_plugins(p: &JsValue) -> mdream::types::PluginConfig {
 // ── WASM exports ──
 
 #[wasm_bindgen(js_name = "htmlToMarkdown")]
-pub fn html_to_markdown(html: &str, options: JsValue) -> String {
-  let (opts, format) = parse_options(&options);
-  mdream::html_to_format(html, opts, format)
+pub fn html_to_markdown(html: &str, options: JsValue) -> Result<String, JsValue> {
+  let (opts, format) = parse_options(&options)?;
+  Ok(mdream::html_to_format(html, opts, format))
 }
 
 #[wasm_bindgen(js_name = "htmlToMarkdownResult")]
-pub fn html_to_markdown_result(html: &str, options: JsValue) -> JsValue {
-  let (opts, format) = parse_options(&options);
+pub fn html_to_markdown_result(html: &str, options: JsValue) -> Result<JsValue, JsValue> {
+  let (opts, format) = parse_options(&options)?;
   let result = mdream::html_to_format_result(html, opts, format);
 
   let obj = js_sys::Object::new();
@@ -260,7 +271,7 @@ pub fn html_to_markdown_result(html: &str, options: JsValue) -> JsValue {
     js_sys::Reflect::set(&obj, &"frontmatter".into(), &fm).unwrap_or_default();
   }
 
-  obj.into()
+  Ok(obj.into())
 }
 
 #[wasm_bindgen]
@@ -271,11 +282,11 @@ pub struct MarkdownStream {
 #[wasm_bindgen]
 impl MarkdownStream {
   #[wasm_bindgen(constructor)]
-  pub fn new(options: JsValue) -> Self {
-    let (opts, format) = parse_options(&options);
-    Self {
+  pub fn new(options: JsValue) -> Result<Self, JsValue> {
+    let (opts, format) = parse_options(&options)?;
+    Ok(Self {
       inner: mdream::MarkdownStreamProcessor::new_with_format(opts, format),
-    }
+    })
   }
 
   #[wasm_bindgen(js_name = "processChunk")]

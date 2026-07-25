@@ -97,6 +97,8 @@ pub struct CleanOptionsNapi {
 #[napi(object)]
 pub struct HtmlToMarkdownOptions {
   pub origin: Option<String>,
+  #[napi(js_name = "urlPolicy", ts_type = "\"preserve\" | \"strict\"")]
+  pub url_policy: Option<String>,
   #[napi(js_name = "cleanUrls")]
   pub clean_urls: Option<bool>,
   pub clean: Option<CleanOptionsNapi>,
@@ -111,10 +113,10 @@ pub struct HtmlToMarkdownOptions {
 
 fn to_core_opts(
   options: Option<HtmlToMarkdownOptions>,
-) -> (
+) -> Result<(
   mdream::types::HTMLToMarkdownOptions,
   mdream::types::OutputFormat,
-) {
+)> {
   let clean = options
     .as_ref()
     .and_then(|o| o.clean.as_ref())
@@ -132,9 +134,20 @@ fn to_core_opts(
     Some("text") => mdream::types::OutputFormat::Text,
     _ => mdream::types::OutputFormat::Markdown,
   };
+  let url_policy = match options.as_ref().and_then(|o| o.url_policy.as_deref()) {
+    None | Some("preserve") => mdream::types::UrlPolicy::Preserve,
+    Some("strict") => mdream::types::UrlPolicy::Strict,
+    Some(value) => {
+      return Err(napi::Error::new(
+        napi::Status::InvalidArg,
+        format!("Invalid urlPolicy: {value}"),
+      ));
+    }
+  };
 
   let core_options = mdream::types::HTMLToMarkdownOptions {
     origin: options.as_ref().and_then(|o| o.origin.clone()),
+    url_policy,
     clean_urls: options.as_ref().and_then(|o| o.clean_urls).unwrap_or(false),
     clean,
     wrap_width: options
@@ -199,7 +212,7 @@ fn to_core_opts(
       })
     }),
   };
-  (core_options, format)
+  Ok((core_options, format))
 }
 
 // ── Helpers ──
@@ -246,7 +259,7 @@ pub fn html_to_markdown(
   options: Option<HtmlToMarkdownOptions>,
 ) -> Result<MdreamNapiResult> {
   catch_panic(move || {
-    let (opts, format) = to_core_opts(options);
+    let (opts, format) = to_core_opts(options)?;
     let result = mdream::html_to_format_result(&html, opts, format);
     Ok(result_to_napi(result))
   })
@@ -261,7 +274,7 @@ pub fn html_to_markdown_bytes(
     .map_err(|e| napi::Error::new(napi::Status::InvalidArg, format!("Invalid UTF-8: {e}")))?;
   let text = text.to_string();
   catch_panic(move || {
-    let (opts, format) = to_core_opts(options);
+    let (opts, format) = to_core_opts(options)?;
     let result = mdream::html_to_format_result(&text, opts, format);
     Ok(result_to_napi(result))
   })
@@ -276,12 +289,12 @@ pub struct MarkdownStream {
 #[napi]
 impl MarkdownStream {
   #[napi(constructor)]
-  pub fn new(options: Option<HtmlToMarkdownOptions>) -> Self {
-    let (opts, format) = to_core_opts(options);
-    Self {
+  pub fn new(options: Option<HtmlToMarkdownOptions>) -> Result<Self> {
+    let (opts, format) = to_core_opts(options)?;
+    Ok(Self {
       inner: mdream::MarkdownStreamProcessor::new_with_format(opts, format),
       utf8_carry: Vec::new(),
-    }
+    })
   }
 
   #[napi]
@@ -457,7 +470,7 @@ pub fn html_to_markdown_chunks(
   splitter_options: Option<SplitterOptionsNapi>,
 ) -> Result<Vec<MarkdownChunkNapi>> {
   catch_panic(move || {
-    let (md_opts, format) = to_core_opts(options);
+    let (md_opts, format) = to_core_opts(options)?;
     let split_opts = to_core_splitter_opts(splitter_options)?;
     let chunks = mdream::splitter::html_to_format_chunks(&html, md_opts, &split_opts, format);
     Ok(chunks.into_iter().map(chunk_to_napi).collect())

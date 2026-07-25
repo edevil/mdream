@@ -47,6 +47,8 @@ export interface TagOverride {
 export interface MdreamOptions {
   /** Origin URL for resolving relative image paths and internal links. */
   origin?: string
+  /** Resource URL policy. `strict` rejects executable and local schemes. */
+  urlPolicy?: 'preserve' | 'strict'
   /**
    * Clean up the markdown output. Pass `true` for all cleanup or an object
    * to enable specific features. `clean.urls` is handled during conversion;

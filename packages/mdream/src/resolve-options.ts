@@ -44,6 +44,8 @@ function resolveFrontmatter(opt: MdreamOptions['frontmatter']): { config?: objec
 }
 
 export function resolveOptions(options: ResolvableOptions): ResolvedOptions {
+  if (options.urlPolicy !== undefined && options.urlPolicy !== 'preserve' && options.urlPolicy !== 'strict')
+    throw new TypeError(`Invalid urlPolicy: ${String(options.urlPolicy)}`)
   if (Array.isArray(options.plugins)) {
     throw new TypeError(
       'Custom hook plugins require @mdream/js. '
@@ -106,7 +108,7 @@ export function resolveOptions(options: ResolvableOptions): ResolvedOptions {
   const { cleanUrls, clean } = resolveCleanConfig(options, minimal)
 
   return {
-    napiOpts: { origin: options.origin, cleanUrls, clean, plugins, wrapWidth: options.wrapWidth, format: options.format },
+    napiOpts: { origin: options.origin, urlPolicy: options.urlPolicy, cleanUrls, clean, plugins, wrapWidth: options.wrapWidth, format: options.format },
     extractionHandlers,
     frontmatterCallback,
   }

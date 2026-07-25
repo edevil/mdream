@@ -1,6 +1,6 @@
 use mdream::types::{
   ExtractionConfig, FilterConfig, FrontmatterConfig, HTMLToMarkdownOptions, IsolateMainConfig,
-  OutputFormat, PluginConfig, TagOverrideConfig,
+  OutputFormat, PluginConfig, TagOverrideConfig, UrlPolicy,
 };
 use mdream::{MarkdownStreamProcessor, html_to_markdown, html_to_markdown_result, html_to_text};
 
@@ -2161,6 +2161,46 @@ fn clean_urls_images() {
   assert_eq!(
     convert_clean(r#"<img src="https://cdn.example.com/img.png?utm_source=site" alt="Photo">"#),
     "![Photo](https://cdn.example.com/img.png)"
+  );
+}
+
+#[test]
+fn strict_url_policy_rejects_dangerous_link_and_image_schemes() {
+  let options = HTMLToMarkdownOptions {
+    url_policy: UrlPolicy::Strict,
+    ..Default::default()
+  };
+  for href in [
+    "javascript:alert(1)",
+    "JaVaScRiPt:alert(1)",
+    "\tdata:text/html,payload",
+    "\u{7f}file:///etc/passwd",
+    "vbscript:msgbox(1)",
+  ] {
+    assert_eq!(
+      html_to_markdown(
+        &format!(r#"<a href="{href}">safe text</a>"#),
+        options.clone()
+      ),
+      "safe text",
+      "expected strict policy to reject {href:?}"
+    );
+    assert_eq!(
+      html_to_markdown(
+        &format!(r#"<img src="{href}" alt="image">"#),
+        options.clone()
+      ),
+      "",
+      "expected strict policy to reject {href:?}"
+    );
+  }
+}
+
+#[test]
+fn preserve_url_policy_keeps_existing_resource_behavior() {
+  assert_eq!(
+    convert(r#"<a href="javascript:alert(1)">text</a><img src="data:image/png,x" alt="image">"#),
+    "[text](<javascript:alert(1)>)![image](data:image/png,x)"
   );
 }
 

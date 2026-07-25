@@ -13,7 +13,7 @@ use crate::types::{
   ElementNode, ExtractedElement, HTMLToMarkdownOptions, OutputFormat, ParsedSelector,
   StreamingError, TagHandler, TailwindData,
 };
-use crate::url::{is_autolink_uri, resolve_url, slugify_heading};
+use crate::url::{is_autolink_uri, resolve_url_with_policy, slugify_heading};
 use std::borrow::Cow;
 use std::collections::TryReserveError;
 

@@ -126,6 +126,11 @@ import { continuationPrefix, getLanguageFromClass, isEmptyLinkHref, isEntityRefe
 
 const TRACKING_PARAM_RE = /^(?:utm_|fbclid|gclid|mc_eid|msclkid|oly_)/
 
+export function validateUrlPolicy(policy: unknown): asserts policy is EngineOptions['urlPolicy'] {
+  if (policy !== undefined && policy !== 'preserve' && policy !== 'strict')
+    throw new TypeError(`Invalid urlPolicy: ${String(policy)}`)
+}
+
 function stripTrackingParams(url: string): string {
   const queryStart = url.indexOf('?')
   const fragmentStart = url.indexOf('#')
@@ -140,7 +145,23 @@ function stripTrackingParams(url: string): string {
   return `${url.slice(0, queryStart)}${query ? `?${query}` : ''}${url.slice(queryEnd)}`
 }
 
-export function resolveUrl(url: string, origin?: string, clean?: EngineOptions['clean']): string {
+export function isUrlAllowed(url: string, policy: EngineOptions['urlPolicy'] = 'preserve'): boolean {
+  if (policy !== 'strict')
+    return true
+
+  let start = 0
+  while (start < url.length) {
+    const code = url.charCodeAt(start)
+    if (code > 0x20 && code !== 0x7F)
+      break
+    start++
+  }
+  const normalized = url.slice(start)
+  const scheme = /^([A-Z][\dA-Z+.-]*):/i.exec(normalized)?.[1]?.toLowerCase()
+  return scheme !== 'javascript' && scheme !== 'data' && scheme !== 'file' && scheme !== 'vbscript'
+}
+
+export function resolveUrl(url: string, origin?: string, clean?: EngineOptions['clean'], policy?: EngineOptions['urlPolicy']): string {
   if (!url || url[0] === '#')
     return url
 
@@ -155,7 +176,8 @@ export function resolveUrl(url: string, origin?: string, clean?: EngineOptions['
   }
 
   const cleansUrls = clean === true || (!!clean && clean.urls === true)
-  return cleansUrls && resolved.includes('?') ? stripTrackingParams(resolved) : resolved
+  resolved = cleansUrls && resolved.includes('?') ? stripTrackingParams(resolved) : resolved
+  return isUrlAllowed(resolved, policy) ? resolved : ''
 }
 
 function serializeMarkdownDestination(destination: string, inTableCell: boolean): string {
@@ -196,6 +218,8 @@ function serializeResourceControl(code: number): string {
 }
 
 function stripsEmptyLink(state: HandlerContext['state'], href: string): boolean {
+  if (href && !resolveUrl(href, state.options?.origin, state.options?.clean, state.options?.urlPolicy))
+    return true
   const clean = state.options?.clean
   if (!(clean === true || (typeof clean === 'object' && clean.emptyLinks)))
     return false
@@ -590,7 +614,7 @@ export const tagHandlers: Record<number, TagHandler> = {
       }
       if (stripsEmptyLink(state, node.attributes.href))
         return ''
-      const href = resolveUrl(node.attributes.href, state.options?.origin, state.options?.clean)
+      const href = resolveUrl(node.attributes.href, state.options?.origin, state.options?.clean, state.options?.urlPolicy)
       const inTableCell = isInsideTableCell(state)
       let title = node.attributes?.title
       // Check if title matches the last content to avoid duplication
@@ -631,7 +655,10 @@ export const tagHandlers: Record<number, TagHandler> = {
   [TAG_IMG]: {
     enter: ({ node, state }) => {
       const alt = node.attributes?.alt || ''
-      const src = resolveUrl(node.attributes?.src || '', state.options?.origin, state.options?.clean)
+      const rawSrc = node.attributes?.src || ''
+      const src = resolveUrl(rawSrc, state.options?.origin, state.options?.clean, state.options?.urlPolicy)
+      if (rawSrc && !src)
+        return ''
       const inTableCell = isInsideTableCell(state)
       return `![${serializeImageDescription(alt, inTableCell)}]${serializeMarkdownResource(src, node.attributes?.title, inTableCell)}`
     },

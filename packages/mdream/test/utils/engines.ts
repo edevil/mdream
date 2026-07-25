@@ -142,6 +142,7 @@ function toFlatOptions(options?: EngineOptions): Partial<RustMdreamOptions> {
   const flat: Partial<RustMdreamOptions> = {
     minimal: false,
     origin: options?.origin,
+    urlPolicy: options?.urlPolicy,
     wrapWidth: options?.wrapWidth,
     format: options?.format,
   }

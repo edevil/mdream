@@ -125,6 +125,9 @@ export interface EngineOptions {
    */
   origin?: string
 
+  /** Resource URL policy. `strict` rejects executable and local schemes. */
+  urlPolicy?: 'preserve' | 'strict'
+
   /**
    * Declarative built-in plugin config. Works with both JS and Rust engines.
    */

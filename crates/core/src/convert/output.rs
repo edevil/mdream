@@ -585,13 +585,27 @@ impl ConvertState {
     };
 
     // Clean mode — single guard for all clean checks
-    if self.clean_flags != 0
+    if (self.clean_flags != 0 || self.options.url_policy == crate::types::UrlPolicy::Strict)
       && let Some(id) = tag_id
     {
       if id == TAG_A {
+        let node = &self.stack[self.stack.len() - 1];
+        if node.attributes.get("href").is_some_and(|href| {
+          !href.is_empty()
+            && resolve_url_with_policy(
+              href,
+              self.options.origin.as_deref(),
+              self.options.clean_urls,
+              self.options.url_policy,
+            )
+            .is_empty()
+        }) {
+          self.skip_current_link = true;
+          self.last_node_is_inline = is_inline;
+          return;
+        }
         // emptyLinks: skip hrefs that cannot represent meaningful navigation.
         if self.clean_flags & CLEAN_EMPTY_LINKS != 0 {
-          let node = &self.stack[self.stack.len() - 1];
           if let Some(href) = node.attributes.get("href")
             && (href == "#"
               || starts_with_ignore_ascii_case(href, b"javascript:")
@@ -845,7 +859,11 @@ impl ConvertState {
 
     // Clean mode exit — single guard. Skipped for overridden anchors,
     // whose custom exit output isn't the default `[…](…)` shape.
-    if !self.plain_text && self.clean_flags != 0 && tag_id == Some(TAG_A) && !has_override {
+    if !self.plain_text
+      && (self.clean_flags != 0 || self.options.url_policy == crate::types::UrlPolicy::Strict)
+      && tag_id == Some(TAG_A)
+      && !has_override
+    {
       // emptyLinks: skip exit for skipped links
       if self.skip_current_link {
         self.skip_current_link = false;
@@ -904,10 +922,11 @@ impl ConvertState {
       if self.clean_flags & CLEAN_REDUNDANT_LINKS != 0
         && let Some(href) = node.attributes.get("href")
       {
-        let resolved = resolve_url(
+        let resolved = resolve_url_with_policy(
           href,
           self.options.origin.as_deref(),
           self.options.clean_urls,
+          self.options.url_policy,
         );
         if link_text == resolved.as_ref() && text_len > 0 {
           if !self.replace_output_range(bracket_pos, text_start, "") {
@@ -939,10 +958,11 @@ impl ConvertState {
       self.write_output(false, is_inline, configured_new_lines, None, false);
       // Write link close directly
       if let Some(href) = node.attributes.get("href") {
-        let resolved = resolve_url(
+        let resolved = resolve_url_with_policy(
           href,
           self.options.origin.as_deref(),
           self.options.clean_urls,
+          self.options.url_policy,
         );
         let mut title = node.attributes.get("title").map_or("", String::as_str);
         if !title.is_empty()
@@ -1951,8 +1971,15 @@ impl ConvertState {
       TAG_IMG => {
         let alt = node.attributes.get("alt").map_or("", String::as_str);
         let src = node.attributes.get("src").map_or("", String::as_str);
-        let resolved_src =
-          resolve_url(src, self.options.origin.as_deref(), self.options.clean_urls);
+        let resolved_src = resolve_url_with_policy(
+          src,
+          self.options.origin.as_deref(),
+          self.options.clean_urls,
+          self.options.url_policy,
+        );
+        if !src.is_empty() && resolved_src.is_empty() {
+          return None;
+        }
         {
           let title = node.attributes.get("title").map(String::as_str);
           let mut s = String::with_capacity(
@@ -2250,7 +2277,13 @@ impl ConvertState {
 
         let src = node.attributes.get("src").filter(|src| !src.is_empty())?;
         Some(Cow::Owned(
-          resolve_url(src, self.options.origin.as_deref(), self.options.clean_urls).into_owned(),
+          resolve_url_with_policy(
+            src,
+            self.options.origin.as_deref(),
+            self.options.clean_urls,
+            self.options.url_policy,
+          )
+          .into_owned(),
         ))
       }
       TAG_Q => Some(Cow::Borrowed("\"")),

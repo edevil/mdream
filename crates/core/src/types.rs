@@ -608,6 +608,8 @@ impl CleanConfig {
 pub struct HTMLToMarkdownOptions {
   /// Base URL used to resolve relative links and image sources.
   pub origin: Option<String>,
+  /// Policy for preserving or rejecting dangerous resource URL schemes.
+  pub url_policy: UrlPolicy,
   /// Strip common tracking query parameters (utm_*, fbclid, gclid, …) from URLs.
   /// Shorthand for `clean: Some(CleanConfig { urls: true, ..Default::default() })`.
   pub clean_urls: bool,
@@ -634,6 +636,13 @@ impl HTMLToMarkdownOptions {
   #[must_use]
   pub fn with_origin(mut self, origin: impl Into<String>) -> Self {
     self.origin = Some(origin.into());
+    self
+  }
+
+  /// Apply a resource URL policy.
+  #[must_use]
+  pub fn with_url_policy(mut self, policy: UrlPolicy) -> Self {
+    self.url_policy = policy;
     self
   }
 
@@ -689,6 +698,16 @@ impl HTMLToMarkdownOptions {
     self.wrap_width = width;
     self
   }
+}
+
+/// Policy applied to link and image resource URLs after resolution.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum UrlPolicy {
+  /// Preserve resource URLs for backwards compatibility.
+  #[default]
+  Preserve,
+  /// Reject executable and local-resource schemes.
+  Strict,
 }
 
 /// Result from html_to_markdown conversion with extraction/frontmatter data

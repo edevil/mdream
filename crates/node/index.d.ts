@@ -59,6 +59,7 @@ export declare function htmlToMarkdownChunks(html: string, options?: HtmlToMarkd
 
 export interface HtmlToMarkdownOptions {
   origin?: string
+  urlPolicy?: "preserve" | "strict"
   cleanUrls?: boolean
   clean?: CleanOptionsNapi
   plugins?: PluginOptions

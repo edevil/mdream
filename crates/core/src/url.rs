@@ -3,6 +3,7 @@
 //! Pure functions extracted from the converter: tracking-param stripping,
 //! relative-URL resolution, GFM autolink detection, and heading slugs.
 
+use crate::types::UrlPolicy;
 use std::borrow::Cow;
 use url::Url;
 
@@ -171,7 +172,38 @@ pub(crate) fn slugify_heading(text: &str) -> String {
 }
 
 #[inline]
-pub(crate) fn resolve_url<'a>(url: &'a str, origin: Option<&str>, clean: bool) -> Cow<'a, str> {
+pub(crate) fn is_url_allowed(url: &str, policy: UrlPolicy) -> bool {
+  if policy == UrlPolicy::Preserve {
+    return true;
+  }
+
+  let normalized = url.trim_start_matches(|c: char| c.is_ascii_control() || c == ' ');
+  let Some(colon) = normalized.find(':') else {
+    return true;
+  };
+  let scheme = &normalized[..colon];
+  if scheme.is_empty()
+    || !scheme.as_bytes()[0].is_ascii_alphabetic()
+    || !scheme[1..]
+      .bytes()
+      .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'+' | b'-' | b'.'))
+  {
+    return true;
+  }
+
+  !matches!(
+    scheme.to_ascii_lowercase().as_str(),
+    "javascript" | "data" | "file" | "vbscript"
+  )
+}
+
+#[inline]
+pub(crate) fn resolve_url_with_policy<'a>(
+  url: &'a str,
+  origin: Option<&str>,
+  clean: bool,
+  policy: UrlPolicy,
+) -> Cow<'a, str> {
   if url.is_empty() || url.starts_with('#') {
     return Cow::Borrowed(url);
   }
@@ -181,14 +213,24 @@ pub(crate) fn resolve_url<'a>(url: &'a str, origin: Option<&str>, clean: bool) -
     .and_then(|origin| origin.join(url).ok())
     .map(Into::into);
 
-  match resolved {
+  let resolved = match resolved {
     Some(resolved) if clean && resolved.as_bytes().contains(&b'?') => {
       Cow::Owned(strip_tracking_params_owned(resolved))
     }
     Some(resolved) => Cow::Owned(resolved),
     None if clean && url.as_bytes().contains(&b'?') => strip_tracking_params(url),
     None => Cow::Borrowed(url),
+  };
+  if is_url_allowed(&resolved, policy) {
+    resolved
+  } else {
+    Cow::Borrowed("")
   }
+}
+
+#[cfg(test)]
+fn resolve_url<'a>(url: &'a str, origin: Option<&str>, clean: bool) -> Cow<'a, str> {
+  resolve_url_with_policy(url, origin, clean, UrlPolicy::Preserve)
 }
 
 #[cfg(test)]
