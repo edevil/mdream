@@ -375,6 +375,11 @@ export interface TagHandler {
   enter?: (context: HandlerContext) => TagHandlerResult
   exit?: (context: HandlerContext) => TagHandlerResult
   isSelfClosing?: boolean
+  /**
+   * Whether `isSelfClosing` was explicitly set by a declarative override.
+   * @internal
+   */
+  overridesSelfClosing?: boolean
   isNonNesting?: boolean
   collapsesInnerWhiteSpace?: boolean
   isInline?: boolean

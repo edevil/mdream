@@ -453,6 +453,7 @@ impl ConvertState {
   /// Emit markdown for entering the element currently on top of self.stack.
   #[inline]
   pub(crate) fn emit_enter_element(&mut self) {
+    self.text_run_generation = self.text_run_generation.wrapping_add(1);
     let stack_len = self.stack.len();
     if stack_len == 0 {
       return;
@@ -728,6 +729,7 @@ impl ConvertState {
   /// Emit markdown for exiting an element (node already popped from stack).
   #[inline]
   pub(crate) fn emit_exit_element(&mut self, node: &ElementNode) {
+    self.text_run_generation = self.text_run_generation.wrapping_add(1);
     if node.excluded_from_markdown {
       self.last_node_is_inline = node.is_inline;
       return;
@@ -1235,6 +1237,7 @@ impl ConvertState {
       self.has_last_text_node = true;
       self.last_text_node_depth = depth;
       self.last_text_node_index = index;
+      self.last_text_run_generation = self.text_run_generation;
       self.last_node_is_inline = false;
       return;
     }
@@ -1344,9 +1347,15 @@ impl ConvertState {
       text
     };
 
+    let continues_previous_text = self.has_last_text_node
+      && self.last_text_run_generation == self.text_run_generation
+      && self.last_text_node_depth == depth
+      && (self.last_text_node_index.checked_add(1) == Some(index)
+        || (depth == 0 && self.last_text_node_index == 0 && index == 0));
     if self.wrap_width != 0 && self.can_wrap_here() {
-      self.push_text_wrapped(text, last_char);
-    } else if !(self.plain_text && self.depth_map[TAG_PRE as usize] > 0)
+      self.push_text_wrapped(text, last_char, continues_previous_text);
+    } else if !(continues_previous_text
+      || (self.plain_text && self.depth_map[TAG_PRE as usize] > 0))
       && self.should_add_spacing_before_text(last_char, text)
     {
       let Some(additional) = text.len().checked_add(1) else {
@@ -1374,6 +1383,7 @@ impl ConvertState {
     self.has_last_text_node = true;
     self.last_text_node_depth = depth;
     self.last_text_node_index = index;
+    self.last_text_run_generation = self.text_run_generation;
     self.last_node_is_inline = false;
   }
 
@@ -1417,6 +1427,11 @@ impl ConvertState {
       }
 
       let mut should_escape = matches!(byte, b'\\' | b'*' | b'_' | b'~' | b'`' | b'[')
+        || (byte == b'&'
+          && (self.depth_map[TAG_SVG as usize] > 0
+            || ((self.depth_map[TAG_XMP as usize] > 0
+              || self.depth_map[TAG_PLAINTEXT as usize] > 0)
+              && is_entity_reference_after_ampersand(&bytes[index + 1..]))))
         || (byte == b']' && in_link)
         || (byte == b'|' && in_table)
         || (byte == b'>' && in_blockquote)
@@ -1703,7 +1718,7 @@ impl ConvertState {
   /// token longer than the width (e.g. a URL) overflows rather than breaking.
   /// A break only ever replaces an inter-word space, so words joined across
   /// inline boundaries (e.g. `foo**bar**`) stay intact.
-  fn push_text_wrapped(&mut self, text: &str, last_char: u8) {
+  fn push_text_wrapped(&mut self, text: &str, last_char: u8, continues_previous_text: bool) {
     let width = self.wrap_width;
     // A leading/trailing space in `text` is significant inter-word separation
     // across an inline boundary (e.g. `… </a> now`); the non-wrap path keeps
@@ -1711,7 +1726,8 @@ impl ConvertState {
     // would otherwise discard it as an empty segment.
     let leading_space = text.starts_with(' ');
     let trailing_space = text.ends_with(' ');
-    let first_needs_space = leading_space || self.should_add_spacing_before_text(last_char, text);
+    let first_needs_space = leading_space
+      || (!continues_previous_text && self.should_add_spacing_before_text(last_char, text));
     let prefix = self.continuation_prefix();
     let prefix_len = prefix.chars().count();
     let buf_start = self.buffer.len();

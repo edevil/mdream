@@ -29,7 +29,7 @@ pub(crate) struct TrackedExtraction {
 
 #[inline(always)]
 fn is_inline_gfm_hazard(byte: u8) -> bool {
-  const LOW: u64 = (1 << b'*') | (1 << b'<');
+  const LOW: u64 = (1 << b'&') | (1 << b'*') | (1 << b'<');
   const HIGH: u64 = (1 << (b'[' - 64))
     | (1 << (b'\\' - 64))
     | (1 << (b'_' - 64))
@@ -202,6 +202,45 @@ const SCRIPT_DATA_ESCAPED_DASH_DASH: u8 = 3;
 const SCRIPT_DATA_DOUBLE_ESCAPED: u8 = 4;
 const SCRIPT_DATA_DOUBLE_ESCAPED_DASH: u8 = 5;
 const SCRIPT_DATA_DOUBLE_ESCAPED_DASH_DASH: u8 = 6;
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum TextMode {
+  Data,
+  RawText,
+  RcData,
+  PlainText,
+}
+
+#[derive(Clone, Copy)]
+struct TokenizerContext {
+  text_mode: TextMode,
+  in_supported_svg: bool,
+  svg_integration_point: bool,
+}
+
+#[inline]
+fn is_html_void_tag(tag_id: Option<u8>) -> bool {
+  matches!(
+    tag_id,
+    Some(
+      TAG_AREA
+        | TAG_BASE
+        | TAG_BR
+        | TAG_COL
+        | TAG_EMBED
+        | TAG_HR
+        | TAG_IMG
+        | TAG_INPUT
+        | TAG_KEYGEN
+        | TAG_LINK
+        | TAG_META
+        | TAG_PARAM
+        | TAG_SOURCE
+        | TAG_TRACK
+        | TAG_WBR
+    )
+  )
+}
 
 #[derive(Clone, Copy)]
 enum ScriptSequenceEnd {
@@ -410,6 +449,7 @@ pub struct ConvertState {
   parse_text_buffer: String,
   script_text_buffer: String,
   pub stack: Vec<ElementNode>,
+  tokenizer_contexts: Vec<TokenizerContext>,
   node_pool: Vec<ElementNode>,
 
   // Plugin flags
@@ -450,6 +490,8 @@ pub struct ConvertState {
   last_text_node_contains_whitespace: bool,
   last_text_node_depth: usize,
   last_text_node_index: usize,
+  text_run_generation: usize,
+  last_text_run_generation: usize,
   has_last_text_node: bool,
   last_node_is_inline: bool,
   /// A collapsed trailing space trimmed from the end of an inline element.
@@ -532,6 +574,55 @@ pub struct ConvertState {
 }
 
 impl ConvertState {
+  #[inline]
+  fn text_mode(&self) -> TextMode {
+    self
+      .tokenizer_contexts
+      .last()
+      .map_or(TextMode::Data, |context| context.text_mode)
+  }
+
+  #[inline]
+  pub(crate) fn in_supported_svg_content(&self) -> bool {
+    self
+      .tokenizer_contexts
+      .last()
+      .is_some_and(|context| context.in_supported_svg)
+  }
+
+  #[inline]
+  pub(crate) fn is_supported_svg_integration_point(&self) -> bool {
+    self
+      .tokenizer_contexts
+      .last()
+      .is_some_and(|context| context.svg_integration_point)
+  }
+
+  pub(crate) fn push_tokenizer_context(&mut self, tag_name: &str, tag_id: Option<u8>) {
+    let parent_in_svg = self.in_supported_svg_content();
+    let svg_integration_point = parent_in_svg
+      && (tag_name.eq_ignore_ascii_case("foreignobject")
+        || tag_name.eq_ignore_ascii_case("desc")
+        || tag_name.eq_ignore_ascii_case("title"));
+    let in_supported_svg = tag_id == Some(TAG_SVG) || (parent_in_svg && !svg_integration_point);
+    let text_mode = match tag_id {
+      Some(TAG_STYLE | TAG_XMP | TAG_IFRAME | TAG_NOFRAMES | TAG_NOEMBED) => TextMode::RawText,
+      Some(TAG_TITLE) if svg_integration_point => TextMode::Data,
+      Some(TAG_TITLE | TAG_TEXTAREA) => TextMode::RcData,
+      Some(TAG_PLAINTEXT) => TextMode::PlainText,
+      _ => TextMode::Data,
+    };
+    self.tokenizer_contexts.push(TokenizerContext {
+      text_mode,
+      in_supported_svg,
+      svg_integration_point,
+    });
+  }
+
+  pub(crate) fn pop_tokenizer_context(&mut self) {
+    self.tokenizer_contexts.pop();
+  }
+
   /// Check if we're inside a table cell (either `<td>` or `<th>`).
   #[inline]
   pub(crate) fn in_table_cell(&self) -> bool {
@@ -581,6 +672,7 @@ impl ConvertState {
       parse_text_buffer: String::new(),
       script_text_buffer: String::new(),
       stack: Vec::with_capacity(32),
+      tokenizer_contexts: Vec::with_capacity(32),
       node_pool: Vec::with_capacity(32),
 
       has_plugins: false,
@@ -621,6 +713,8 @@ impl ConvertState {
       last_text_node_contains_whitespace: false,
       last_text_node_depth: 0,
       last_text_node_index: 0,
+      text_run_generation: 0,
+      last_text_run_generation: 0,
       has_last_text_node: false,
       last_node_is_inline: false,
       pending_inline_whitespace: false,
@@ -1261,7 +1355,10 @@ impl ConvertState {
         }
 
         if cc == AMPERSAND_CHAR {
-          self.has_encoded_html_entity = true;
+          let text_mode = self.text_mode();
+          if text_mode != TextMode::RawText && text_mode != TextMode::PlainText {
+            self.has_encoded_html_entity = true;
+          }
         }
         if cc > 32 && cc < 0x80 && is_inline_gfm_hazard(cc) {
           self.text_buffer_has_inline_gfm_hazard = true;
@@ -1323,8 +1420,9 @@ impl ConvertState {
       // matching closing tag exits. All other '<' patterns (comments,
       // non-matching closing tags, opening tags) are treated as literal text.
       if self.in_non_nesting {
+        let text_mode = self.text_mode();
         let next = bytes[i + 1];
-        if next == SLASH_CHAR {
+        if text_mode != TextMode::PlainText && next == SLASH_CHAR {
           let peek_start = i + 2;
           let mut peek_end = peek_start;
           while peek_end < chunk_length {
@@ -1336,11 +1434,12 @@ impl ConvertState {
           }
           let peek_name = &chunk[peek_start..peek_end];
           let peek_tag_id = crate::consts::get_tag_id_ci_bytes(peek_name.as_bytes());
-          if self
-            .stack
-            .last()
-            .is_some_and(|curr| curr.tag_id == peek_tag_id)
-          {
+          if self.stack.last().is_some_and(|curr| {
+            curr.custom_name.as_deref().map_or_else(
+              || curr.tag_id == peek_tag_id,
+              |name| name.eq_ignore_ascii_case(peek_name),
+            )
+          }) {
             // Matching closing tag: fall through to normal closing tag processing
             if !text_buffer.is_empty() {
               self.process_text_buffer(&mut text_buffer);
@@ -1358,6 +1457,7 @@ impl ConvertState {
           }
         }
         // Not a matching closing tag: treat '<' as literal text
+        self.text_buffer_has_inline_gfm_hazard = true;
         if !self.push_parse_char(&mut text_buffer, '<') {
           break;
         }
@@ -1372,6 +1472,13 @@ impl ConvertState {
 
       if next == EXCLAMATION_CHAR {
         let remaining = &chunk[i..];
+        let has_cdata_override = self
+          .options
+          .plugins
+          .as_ref()
+          .and_then(|plugins| plugins.tag_overrides.as_ref())
+          .is_some_and(|overrides| overrides.iter().any(|(name, _)| name == "#cdata-section"));
+        let recognizes_cdata = has_cdata_override || self.in_supported_svg_content();
         // CDATA is dropped by default but can be surfaced via
         // tagOverrides["#cdata-section"]. Handle it before the generic
         // comment/doctype scan, which would otherwise stop at the first
@@ -1379,14 +1486,37 @@ impl ConvertState {
         // `<!`, so only the `[CDATA[` tail is checked; `strip_prefix`
         // short-circuits on the third byte for the common comment and
         // doctype cases.
-        if let Some(after_open) = chunk[i + 2..].strip_prefix("[CDATA[") {
+        if recognizes_cdata && let Some(after_open) = chunk[i + 2..].strip_prefix("[CDATA[") {
           if let Some(rel) = after_open.find("]]>") {
             if !text_buffer.is_empty() {
               self.process_text_buffer(&mut text_buffer);
               text_buffer.clear();
               run_start = i;
             }
-            self.process_cdata_section(&after_open[..rel]);
+            let content = &after_open[..rel];
+            if has_cdata_override {
+              self.process_cdata_section(content);
+            } else if self.in_supported_svg_content() && !content.is_empty() {
+              for &byte in content.as_bytes() {
+                if is_whitespace(byte) {
+                  self.text_buffer_contains_whitespace = true;
+                } else {
+                  self.text_buffer_contains_non_whitespace = true;
+                }
+                if byte < 0x80 && is_inline_gfm_hazard(byte) {
+                  self.text_buffer_has_inline_gfm_hazard = true;
+                }
+              }
+              if !self.push_parse_str(&mut text_buffer, content) {
+                break;
+              }
+              self.process_text_buffer(&mut text_buffer);
+              text_buffer.clear();
+              if let Some(&last) = content.as_bytes().last() {
+                self.last_char_was_whitespace = is_whitespace(last);
+                self.just_closed_tag = false;
+              }
+            }
             i += "<![CDATA[".len() + rel + 3;
             continue;
           }
@@ -1394,7 +1524,10 @@ impl ConvertState {
           carry = true;
           break;
         }
-        if remaining.len() < "<![CDATA[".len() && "<![CDATA[".starts_with(remaining) {
+        if recognizes_cdata
+          && remaining.len() < "<![CDATA[".len()
+          && "<![CDATA[".starts_with(remaining)
+        {
           // Chunk boundary fell inside the `<![CDATA[` opener.
           carry = true;
           break;
@@ -1446,29 +1579,27 @@ impl ConvertState {
         // lowercase allocation entirely. Only fall back to a Cow when
         // the override path actually needs the lowercased name.
         let builtin_tag_id = crate::consts::get_tag_id_ci_bytes(tag_name_raw.as_bytes());
-        let tag_name: Cow<str> = if builtin_tag_id.is_some() {
-          Cow::Borrowed(tag_name_raw)
+        let tag_name: Cow<str> = if let Some(id) = builtin_tag_id {
+          Cow::Borrowed(TAG_NAMES[id as usize])
         } else if tag_name_raw.bytes().any(|b| b.is_ascii_uppercase()) {
           Cow::Owned(tag_name_raw.to_ascii_lowercase())
         } else {
           Cow::Borrowed(tag_name_raw)
         };
-        let tag_id = if builtin_tag_id.is_some() {
-          builtin_tag_id
-        } else {
-          self
-            .options
-            .plugins
-            .as_ref()
-            .and_then(|p| p.tag_overrides.as_ref())
-            .and_then(|ovs| {
-              ovs
-                .iter()
-                .find(|(k, _)| k == tag_name.as_ref())
-                .map(|(_, v)| v)
-            })
-            .and_then(|ov| ov.alias_tag_id)
-        };
+        let alias_tag_id = self
+          .options
+          .plugins
+          .as_ref()
+          .and_then(|p| p.tag_overrides.as_ref())
+          .and_then(|ovs| {
+            ovs
+              .iter()
+              .find(|(k, _)| k == tag_name.as_ref())
+              .map(|(_, v)| v)
+          })
+          .and_then(|ov| ov.alias_tag_id);
+        let tag_id = alias_tag_id.or(builtin_tag_id);
+        let is_alias = alias_tag_id.is_some_and(|alias| Some(alias) != builtin_tag_id);
         i2 = tag_name_end;
 
         if tag_name_raw.is_empty() {
@@ -1491,7 +1622,7 @@ impl ConvertState {
         }
 
         let result =
-          self.process_opening_tag(&tag_name, tag_id, builtin_tag_id.is_some(), chunk, i2);
+          self.process_opening_tag(&tag_name, tag_id, builtin_tag_id, is_alias, chunk, i2);
         if result.skip {
           i = result.new_position;
         } else if result.complete {
@@ -1501,7 +1632,7 @@ impl ConvertState {
             self.just_closed_tag = true;
           } else {
             self.is_first_text_in_element = true;
-            if builtin_tag_id == Some(TAG_SCRIPT) {
+            if builtin_tag_id == Some(TAG_SCRIPT) && tag_id == Some(TAG_SCRIPT) {
               match self.process_script_chunk(chunk, i) {
                 ScriptChunk::Closed(close_index) => i = close_index,
                 ScriptChunk::Carry(from) => {
@@ -1640,7 +1771,17 @@ impl ConvertState {
       self.push_script_text(leftover);
       self.flush_script_text();
       self.script_data_state = SCRIPT_DATA;
-    } else if !leftover.is_empty() && leftover.as_bytes()[0] != LT_CHAR {
+    } else if !leftover.is_empty()
+      && (leftover.as_bytes()[0] != LT_CHAR
+        || self.in_non_nesting
+        || self.text_mode() != TextMode::Data
+        || (self.is_supported_svg_integration_point() && leftover == "<"))
+    {
+      if leftover.as_bytes()[0] == LT_CHAR {
+        self.text_buffer_contains_non_whitespace = true;
+        self.text_buffer_has_inline_gfm_hazard = true;
+        self.last_char_was_whitespace = false;
+      }
       let mut buf = leftover.to_string();
       self.process_text_buffer(&mut buf);
     }

@@ -7,20 +7,24 @@ import {
   NodeEventExit,
   TAG_A,
   TAG_ADDRESS,
+  TAG_AREA,
   TAG_ARTICLE,
   TAG_ASIDE,
   TAG_BASE,
   TAG_BLOCKQUOTE,
+  TAG_BR,
   TAG_BUTTON,
   TAG_CAPTION,
   TAG_CENTER,
   TAG_CODE,
+  TAG_COL,
   TAG_DD,
   TAG_DETAILS,
   TAG_DIALOG,
   TAG_DIV,
   TAG_DL,
   TAG_DT,
+  TAG_EMBED,
   TAG_FIELDSET,
   TAG_FIGCAPTION,
   TAG_FIGURE,
@@ -36,32 +40,46 @@ import {
   TAG_HEADER,
   TAG_HR,
   TAG_HTML,
+  TAG_IFRAME,
+  TAG_IMG,
+  TAG_INPUT,
+  TAG_KEYGEN,
   TAG_LI,
   TAG_LINK,
   TAG_MAIN,
   TAG_META,
   TAG_NAV,
+  TAG_NOEMBED,
+  TAG_NOFRAMES,
   TAG_NOSCRIPT,
   TAG_OL,
   TAG_OPTGROUP,
   TAG_OPTION,
   TAG_P,
+  TAG_PARAM,
+  TAG_PLAINTEXT,
   TAG_PRE,
   TAG_SCRIPT,
   TAG_SECTION,
   TAG_SELECT,
+  TAG_SOURCE,
   TAG_STYLE,
   TAG_SUMMARY,
+  TAG_SVG,
   TAG_TABLE,
   TAG_TBODY,
   TAG_TD,
   TAG_TEMPLATE,
+  TAG_TEXTAREA,
   TAG_TFOOT,
   TAG_TH,
   TAG_THEAD,
   TAG_TITLE,
   TAG_TR,
+  TAG_TRACK,
   TAG_UL,
+  TAG_WBR,
+  TAG_XMP,
   TagIdMap,
   TEXT_NODE,
 } from './const'
@@ -77,7 +95,6 @@ const QUOTE_CHAR = 34 // '"'
 const APOS_CHAR = 39 // '\''
 const EXCLAMATION_CHAR = 33 // '!'
 const AMPERSAND_CHAR = 38 // '&'
-const BACKSLASH_CHAR = 92 // '\'
 const DASH_CHAR = 45 // '-'
 const SPACE_CHAR = 32 // ' '
 const TAB_CHAR = 9 // '\t'
@@ -104,6 +121,64 @@ const SCRIPT_DATA_DOUBLE_ESCAPED_DASH_DASH = 6
 const SCRIPT_SEQUENCE_NO_MATCH = -1
 const SCRIPT_SEQUENCE_INCOMPLETE = -2
 const SCRIPT_SCAN_COMPLETE = -1
+
+const TEXT_MODE_DATA = 0
+const TEXT_MODE_RAWTEXT = 1
+const TEXT_MODE_RCDATA = 2
+const TEXT_MODE_PLAINTEXT = 3
+
+const HTML_VOID_TAGS: Uint8Array = (() => {
+  const tags = new Uint8Array(MAX_TAG_ID)
+  for (const id of [TAG_AREA, TAG_BASE, TAG_BR, TAG_COL, TAG_EMBED, TAG_HR, TAG_IMG, TAG_INPUT, TAG_KEYGEN, TAG_LINK, TAG_META, TAG_PARAM, TAG_SOURCE, TAG_TRACK, TAG_WBR])
+    tags[id] = 1
+  return tags
+})()
+
+function textModeForNode(node: ElementNode | null | undefined): number {
+  if (!node)
+    return TEXT_MODE_DATA
+  if (node instanceof ParsedElementNode)
+    return node.tokenizerTextMode
+  return textModeForTag(node.tagId, isSupportedSvgIntegrationPoint(node))
+}
+
+function textModeForTag(tagId: number | undefined, svgIntegrationPoint: boolean): number {
+  switch (tagId) {
+    case TAG_STYLE:
+    case TAG_XMP:
+    case TAG_IFRAME:
+    case TAG_NOFRAMES:
+    case TAG_NOEMBED:
+      return TEXT_MODE_RAWTEXT
+    case TAG_TITLE:
+      return svgIntegrationPoint ? TEXT_MODE_DATA : TEXT_MODE_RCDATA
+    case TAG_TEXTAREA: return TEXT_MODE_RCDATA
+    case TAG_PLAINTEXT:
+      return TEXT_MODE_PLAINTEXT
+    default:
+      return TEXT_MODE_DATA
+  }
+}
+
+function inSupportedSvgContent(node: ElementNode | null | undefined): boolean {
+  if (node instanceof ParsedElementNode)
+    return node.inSupportedSvgContent
+  for (let current = node; current; current = current.parent) {
+    if (current.name === 'foreignobject' || current.name === 'desc' || current.name === 'title')
+      return false
+    if (current.tagId === TAG_SVG)
+      return true
+  }
+  return false
+}
+
+function isSupportedSvgIntegrationPoint(node: ElementNode | null | undefined): boolean {
+  if (node instanceof ParsedElementNode)
+    return node.svgIntegrationPoint
+  return !!node
+    && (node.name === 'foreignobject' || node.name === 'desc' || node.name === 'title')
+    && inSupportedSvgContent(node.parent)
+}
 
 // Firefox and Chromium flatten DOM trees beyond this practical depth. Stop
 // conversion at the same boundary instead of growing the parser's parent chain
@@ -408,7 +483,16 @@ export function finalizeParse(
       processTextBuffer(scriptText, state, handleEvent)
     }
   }
-  else if (leftover.length > 0 && leftover.charCodeAt(0) !== LT_CHAR) {
+  else if (leftover.length > 0
+    && (leftover.charCodeAt(0) !== LT_CHAR
+      || (state.currentNode?.tagHandler?.isNonNesting
+        && !isSupportedSvgIntegrationPoint(state.currentNode))
+      || textModeForNode(state.currentNode) !== TEXT_MODE_DATA
+      || (isSupportedSvgIntegrationPoint(state.currentNode) && leftover === '<'))) {
+    if (leftover.charCodeAt(0) === LT_CHAR) {
+      state.textBufferContainsNonWhitespace = true
+      state.lastCharWasWhitespace = false
+    }
     processTextBuffer(leftover, state, handleEvent)
   }
   while (state.currentNode) {
@@ -435,6 +519,9 @@ class ParsedElementNode implements ElementNode {
   declare excludedFromMarkdown?: boolean
   pluginOutput?: string[]
   context?: ElementNode['context']
+  readonly tokenizerTextMode: number
+  readonly inSupportedSvgContent: boolean
+  readonly svgIntegrationPoint: boolean
   private cachedDepthMap?: Uint8Array
 
   constructor(
@@ -453,6 +540,11 @@ class ParsedElementNode implements ElementNode {
     this.index = index
     this.tagId = tagId
     this.tagHandler = tagHandler
+    const parentInSvg = inSupportedSvgContent(parent)
+    this.svgIntegrationPoint = parentInSvg
+      && (name === 'foreignobject' || name === 'desc' || name === 'title')
+    this.inSupportedSvgContent = tagId === TAG_SVG || (parentInSvg && !this.svgIntegrationPoint)
+    this.tokenizerTextMode = textModeForTag(tagId, this.svgIntegrationPoint)
   }
 
   get depthMap(): Uint8Array {
@@ -780,7 +872,9 @@ function parseHtmlInternal(
     // If not starting a tag, add to text buffer and continue
     if (currentCharCode !== LT_CHAR) {
       if (currentCharCode === AMPERSAND_CHAR) {
-        state.hasEncodedHtmlEntity = true
+        const textMode = textModeForNode(state.currentNode)
+        if (textMode !== TEXT_MODE_RAWTEXT && textMode !== TEXT_MODE_PLAINTEXT)
+          state.hasEncodedHtmlEntity = true
       }
 
       // Whitespace handling optimization
@@ -835,16 +929,43 @@ function parseHtmlInternal(
 
     const nextCharCode = htmlChunk.charCodeAt(i + 1)
 
+    const svgIntegrationPoint = isSupportedSvgIntegrationPoint(state.currentNode)
+    if (state.currentNode?.tagHandler?.isNonNesting && !svgIntegrationPoint) {
+      let matchingClose = false
+      if (textModeForNode(state.currentNode) !== TEXT_MODE_PLAINTEXT && nextCharCode === SLASH_CHAR) {
+        let peekEnd = i + 2
+        while (peekEnd < chunkLength) {
+          const c = htmlChunk.charCodeAt(peekEnd)
+          if (c === GT_CHAR || c === SLASH_CHAR || isWhitespace(c))
+            break
+          peekEnd++
+        }
+        const peekTagName = normalizeTagName(htmlChunk.substring(i + 2, peekEnd))
+        const peekHandler = state.tagOverrideHandlers?.get(peekTagName)
+        const peekTagId = effectiveTagId(peekTagName, TagIdMap[peekTagName] ?? -1, state)
+        matchingClose = matchesClosingTag(state.currentNode, peekTagName, peekTagId, peekHandler?.aliasTagId !== undefined)
+      }
+      if (!matchingClose) {
+        state.textBufferContainsNonWhitespace = true
+        state.lastCharWasWhitespace = false
+        state.justClosedTag = false
+        textBuffer += htmlChunk[i++]
+        continue
+      }
+    }
+
     // COMMENT, DOCTYPE or CDATA
     if (nextCharCode === EXCLAMATION_CHAR) {
       // Discriminate on the third char: '[' is a CDATA section, anything else
       // is a comment/doctype. Only the rare '[' case pays for the string work.
       if (htmlChunk.charCodeAt(i + 2) === OPEN_BRACKET_CHAR) {
+        const recognizesCdata = state.tagOverrideHandlers?.has('#cdata-section')
+          || inSupportedSvgContent(state.currentNode)
         // CDATA is dropped by default but can be surfaced via
         // tagOverrides['#cdata-section']. Handle it before the generic
         // comment/doctype scan, which would otherwise stop at the first `>`
         // inside `]]>` and discard the content.
-        if (htmlChunk.startsWith('<![CDATA[', i)) {
+        if (recognizesCdata && htmlChunk.startsWith('<![CDATA[', i)) {
           const end = htmlChunk.indexOf(']]>', i + 9)
           if (end === -1) {
             // Unterminated CDATA: re-parse from '<' in the next chunk.
@@ -856,12 +977,29 @@ function parseHtmlInternal(
             textBuffer = ''
             runStart = i
           }
-          processCdataSection(htmlChunk.substring(i + 9, end), state, handleEvent)
+          const content = htmlChunk.substring(i + 9, end)
+          if (state.tagOverrideHandlers?.has('#cdata-section')) {
+            processCdataSection(content, state, handleEvent)
+          }
+          else if (inSupportedSvgContent(state.currentNode) && content.length > 0) {
+            for (let j = 0; j < content.length; j++) {
+              if (isWhitespace(content.charCodeAt(j)))
+                state.textBufferContainsWhitespace = true
+              else
+                state.textBufferContainsNonWhitespace = true
+            }
+            processTextBuffer(content, state, handleEvent)
+            const last = content.charCodeAt(content.length - 1)
+            state.lastCharWasWhitespace = isWhitespace(last)
+            state.justClosedTag = false
+          }
           i = end + 3
           runStart = i
           continue
         }
-        if (chunkLength - i < 9 && '<![CDATA['.startsWith(htmlChunk.substring(i))) {
+        if (recognizesCdata
+          && chunkLength - i < 9
+          && '<![CDATA['.startsWith(htmlChunk.substring(i))) {
           // Chunk boundary fell inside the `<![CDATA[` opener.
           textBuffer += htmlChunk.substring(i)
           break
@@ -887,7 +1025,8 @@ function parseHtmlInternal(
     }
     // CLOSING TAG
     else if (nextCharCode === SLASH_CHAR) {
-      if (state.currentNode?.tagHandler?.isNonNesting) {
+      if (state.currentNode?.tagHandler?.isNonNesting && !isSupportedSvgIntegrationPoint(state.currentNode)) {
+        const textMode = textModeForNode(state.currentNode)
         // Peek at the closing tag name to check if it matches the non-nesting tag
         let peekEnd = i + 2
         while (peekEnd < chunkLength) {
@@ -899,7 +1038,8 @@ function parseHtmlInternal(
         const peekTagName = normalizeTagName(htmlChunk.substring(i + 2, peekEnd))
         const peekHandler = state.tagOverrideHandlers?.get(peekTagName)
         const peekTagId = effectiveTagId(peekTagName, TagIdMap[peekTagName] ?? -1, state)
-        if (!matchesClosingTag(state.currentNode, peekTagName, peekTagId, peekHandler?.aliasTagId !== undefined)) {
+        if (textMode === TEXT_MODE_PLAINTEXT
+          || !matchesClosingTag(state.currentNode, peekTagName, peekTagId, peekHandler?.aliasTagId !== undefined)) {
           textBuffer += htmlChunk[i++]
           continue
         }
@@ -952,7 +1092,7 @@ function parseHtmlInternal(
 
       // Inside a non-nesting element (script/style/title/textarea) no opening
       // tag is a real element; a nested `<script>` is literal text (issue #93).
-      if (state.currentNode?.tagHandler?.isNonNesting) {
+      if (state.currentNode?.tagHandler?.isNonNesting && !isSupportedSvgIntegrationPoint(state.currentNode)) {
         textBuffer += htmlChunk[i++]
         continue
       }
@@ -1170,11 +1310,26 @@ function processClosingTag(
   const tagId = effectiveTagId(tagName, typeof mappedTagId === 'number' ? mappedTagId : -1, state)
   const closingIsAlias = tagHandler?.aliasTagId !== undefined
 
-  if (state.currentNode?.tagHandler?.isNonNesting && !matchesClosingTag(state.currentNode, tagName, tagId, closingIsAlias)) {
+  if (state.currentNode?.tagHandler?.isNonNesting
+    && !isSupportedSvgIntegrationPoint(state.currentNode)
+    && !matchesClosingTag(state.currentNode, tagName, tagId, closingIsAlias)) {
     return {
       complete: false,
       newPosition: position,
       remainingText: htmlChunk.substring(position),
+    }
+  }
+
+  if (mappedTagId === TAG_BR) {
+    const parent = state.currentNode
+    processOpeningTag('br', TAG_BR, '>', 0, state, handleEvent)
+    if (state.currentNode && state.currentNode !== parent)
+      closeNode(state.currentNode, state, handleEvent)
+    state.justClosedTag = true
+    return {
+      complete: true,
+      newPosition: i + 1,
+      remainingText: '',
     }
   }
 
@@ -1370,15 +1525,17 @@ function processOpeningTag(
   selfClosing: boolean
   skip?: boolean
 } {
+  const builtinTagId = TagIdMap[tagName as keyof typeof TagIdMap]
   tagId = effectiveTagId(tagName, tagId, state)
 
   // Check if current element needs closing
-  if (state.currentNode?.tagHandler?.isNonNesting) {
+  if (state.currentNode?.tagHandler?.isNonNesting && !isSupportedSvgIntegrationPoint(state.currentNode)) {
     closeNode(state.currentNode, state, handleEvent)
   }
 
-  const tagHandler = state.tagOverrideHandlers?.get(tagName) ?? tagHandlers[tagId]
-  const result = processTagAttributes(htmlChunk, i, tagHandler)
+  const overrideHandler = state.tagOverrideHandlers?.get(tagName)
+  const tagHandler = overrideHandler ?? tagHandlers[tagId]
+  const result = processTagAttributes(htmlChunk, i)
 
   if (!result.complete) {
     return {
@@ -1388,6 +1545,17 @@ function processOpeningTag(
       selfClosing: false,
     }
   }
+  const intrinsicVoid = typeof builtinTagId === 'number'
+    && HTML_VOID_TAGS[builtinTagId] === 1
+    && !inSupportedSvgContent(state.currentNode)
+  const supportedForeignSelfClose = result.selfClosing
+    && (inSupportedSvgContent(state.currentNode) || builtinTagId === TAG_SVG)
+  const overrideSelfClosing = overrideHandler?.overridesSelfClosing === true
+    && overrideHandler.isSelfClosing === true
+  const aliasedVoid = overrideHandler?.aliasTagId !== undefined
+    && overrideHandler.aliasTagId !== builtinTagId
+    && overrideHandler.isSelfClosing === true
+  const selfClosing = intrinsicVoid || overrideSelfClosing || aliasedVoid || supportedForeignSelfClose
 
   // Browser recovery: a non-head start tag while <head> is still open means the
   // page never closed its head (no </head>/<body>). Auto-close head (and anything
@@ -1496,7 +1664,7 @@ function processOpeningTag(
     }
   }
 
-  if (!result.selfClosing && state.depth >= MAX_ELEMENT_DEPTH) {
+  if (!selfClosing && state.depth >= MAX_ELEMENT_DEPTH) {
     state.depthLimitReached = true
     return {
       complete: true,
@@ -1546,7 +1714,7 @@ function processOpeningTag(
   state.currentNode = parentNode
   state.hasEncodedHtmlEntity = false
 
-  if (result.selfClosing) {
+  if (selfClosing) {
     closeNode(tag, state, handleEvent)
     state.justClosedTag = true
   }
@@ -1558,14 +1726,14 @@ function processOpeningTag(
     complete: true,
     newPosition: i,
     remainingText: '',
-    selfClosing: result.selfClosing,
+    selfClosing,
   }
 }
 
 /**
  * Extract and process HTML tag attributes
  */
-function processTagAttributes(htmlChunk: string, position: number, tagHandler: Node['tagHandler']): {
+function processTagAttributes(htmlChunk: string, position: number): {
   complete: boolean
   newPosition: number
   attributes: Record<string, string>
@@ -1575,30 +1743,27 @@ function processTagAttributes(htmlChunk: string, position: number, tagHandler: N
   let i = position
   const chunkLength = htmlChunk.length
 
-  const selfClosing = tagHandler?.isSelfClosing || false
+  const BEFORE_NAME = 0
+  const NAME = 1
+  const AFTER_NAME = 2
+  const BEFORE_VALUE = 3
+  const QUOTED_VALUE = 4
+  const AFTER_QUOTED_VALUE = 5
+  const UNQUOTED_VALUE = 6
+
   const attrStartPos = i
-  let insideQuote = false
+  let state = BEFORE_NAME
   let quoteChar = 0
   let hasAttributeContent = false
 
-  let prevChar = 0
   while (i < chunkLength) {
     const c = htmlChunk.charCodeAt(i)
 
-    if (insideQuote) {
-      if (c === quoteChar && prevChar !== BACKSLASH_CHAR) {
-        insideQuote = false
-      }
-      i++
-      continue
-    }
-    else if (c === QUOTE_CHAR || c === APOS_CHAR) {
-      insideQuote = true
-      quoteChar = c
-      hasAttributeContent = true
-    }
-    else if (c === SLASH_CHAR && i + 1 < chunkLength
-      && htmlChunk.charCodeAt(i + 1) === GT_CHAR) {
+    const selfClosing = c === SLASH_CHAR
+      && (state === BEFORE_NAME || state === NAME || state === AFTER_NAME || state === AFTER_QUOTED_VALUE)
+      && i + 1 < chunkLength
+      && htmlChunk.charCodeAt(i + 1) === GT_CHAR
+    if (selfClosing) {
       const attrStr = hasAttributeContent ? htmlChunk.substring(attrStartPos, i).trim() : ''
       return {
         complete: true,
@@ -1608,22 +1773,60 @@ function processTagAttributes(htmlChunk: string, position: number, tagHandler: N
         attrBuffer: attrStr,
       }
     }
-    else if (c === GT_CHAR) {
+    if (c === GT_CHAR && state !== QUOTED_VALUE) {
       const attrStr = hasAttributeContent ? htmlChunk.substring(attrStartPos, i).trim() : ''
       return {
         complete: true,
         newPosition: i + 1,
         attributes: hasAttributeContent ? parseAttributes(attrStr) : EMPTY_ATTRIBUTES,
-        selfClosing,
+        selfClosing: false,
         attrBuffer: attrStr,
       }
     }
-    else if (!isWhitespace(c)) {
-      hasAttributeContent = true
+
+    switch (state) {
+      case BEFORE_NAME:
+        if (!isWhitespace(c))
+          state = NAME
+        break
+      case NAME:
+        if (isWhitespace(c))
+          state = AFTER_NAME
+        else if (c === EQUALS_CHAR)
+          state = BEFORE_VALUE
+        break
+      case AFTER_NAME:
+        if (c === EQUALS_CHAR)
+          state = BEFORE_VALUE
+        else if (!isWhitespace(c))
+          state = NAME
+        break
+      case BEFORE_VALUE:
+        if (c === QUOTE_CHAR || c === APOS_CHAR) {
+          state = QUOTED_VALUE
+          quoteChar = c
+        }
+        else if (!isWhitespace(c)) {
+          state = UNQUOTED_VALUE
+        }
+        break
+      case QUOTED_VALUE:
+        if (c === quoteChar)
+          state = AFTER_QUOTED_VALUE
+        break
+      case AFTER_QUOTED_VALUE:
+        state = isWhitespace(c) ? BEFORE_NAME : NAME
+        break
+      case UNQUOTED_VALUE:
+        if (isWhitespace(c))
+          state = BEFORE_NAME
+        break
     }
 
+    if (!isWhitespace(c))
+      hasAttributeContent = true
+
     i++
-    prevChar = c
   }
 
   return {
@@ -1707,10 +1910,7 @@ export function parseAttributes(attrStr: string): Record<string, string> {
         break
 
       case QUOTED_VALUE:
-        if (charCode === BACKSLASH_CHAR && i + 1 < len) {
-          i++
-        }
-        else if (charCode === quoteChar) {
+        if (charCode === quoteChar) {
           const raw = attrStr.substring(valueStart, i)
           result[name] = raw.includes('&') ? decodeHTMLEntities(raw, true) : raw
           state = WHITESPACE

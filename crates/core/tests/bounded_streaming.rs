@@ -84,6 +84,8 @@ fn open_constructs_obey_capacity_boundaries() {
     &["<pre><code>", "line\n```wide", "</code></pre>"][..],
     &["<blockquote>", "<p>one</p><p>two</p>", "</blockquote>"][..],
     &["<p><a href=\"/destination\">", "link text", "</a></p>"][..],
+    &["<xmp>", "&amp;<b>x</b>", "</xmp>"][..],
+    &["<plaintext>", "&amp;</plaintext><p>x</p>"][..],
   ] {
     assert_exact_boundary(chunks);
   }

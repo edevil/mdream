@@ -463,10 +463,12 @@ impl ConvertState {
     &mut self,
     tag_name: &str,
     tag_id: Option<u8>,
-    is_builtin: bool,
+    builtin_tag_id: Option<u8>,
+    is_alias: bool,
     html_chunk: &str,
     position: usize,
   ) -> OpeningTagResult {
+    let is_builtin = builtin_tag_id.is_some();
     let tag_handler = tag_id.and_then(get_tag_handler);
     let needs_attrs = tag_handler.is_some_and(|h| h.needs_attributes)
       || self.has_tailwind
@@ -474,8 +476,8 @@ impl ConvertState {
       || self.has_extraction
       || self.has_tag_overrides
       || self.has_frontmatter;
-    let (complete, new_position, attributes, self_closing) =
-      process_tag_attributes(html_chunk, position, tag_handler, !needs_attrs);
+    let (complete, new_position, attributes, syntactic_self_closing) =
+      process_tag_attributes(html_chunk, position, !needs_attrs);
 
     if !complete {
       return OpeningTagResult {
@@ -485,6 +487,21 @@ impl ConvertState {
         skip: false,
       };
     }
+
+    let override_self_closing = self
+      .options
+      .plugins
+      .as_ref()
+      .and_then(|plugins| plugins.tag_overrides.as_ref())
+      .and_then(|overrides| overrides.iter().find(|(name, _)| name == tag_name))
+      .is_some_and(|(_, config)| config.is_self_closing == Some(true));
+    let aliased_void = is_alias && tag_handler.is_some_and(|handler| handler.is_self_closing);
+    let supported_foreign_self_close = syntactic_self_closing
+      && (self.in_supported_svg_content() || builtin_tag_id == Some(TAG_SVG));
+    let self_closing = (is_html_void_tag(builtin_tag_id) && !self.in_supported_svg_content())
+      || override_self_closing
+      || aliased_void
+      || supported_foreign_self_close;
 
     // Browser recovery: a non-head start tag while <head> is still open means the
     // page never closed its head (no </head>/<body>). Auto-close head (and anything
@@ -635,7 +652,7 @@ impl ConvertState {
     self.depth += 1;
 
     let current_walk_index = self.stack.last().map_or(0, |n| n.current_walk_index);
-    let custom_name = if is_builtin {
+    let custom_name = if is_builtin && !is_alias {
       None
     } else {
       Some(tag_name.to_string())
@@ -899,6 +916,7 @@ impl ConvertState {
       self.block_parent_indices.push(idx);
     }
 
+    self.push_tokenizer_context(tag_name, tag_id);
     self.stack.push(tag);
 
     // Extraction
@@ -979,7 +997,8 @@ impl ConvertState {
 
     self.has_encoded_html_entity = false;
 
-    if self.stack.last().is_some_and(|n| n.is_non_nesting) && !self_closing {
+    let svg_title = self.is_supported_svg_integration_point();
+    if self.stack.last().is_some_and(|n| n.is_non_nesting) && !svg_title && !self_closing {
       self.in_non_nesting = true;
     }
 
@@ -1022,6 +1041,7 @@ impl ConvertState {
     let popping_index = self.stack.len() - 1;
     // Guard already checked above, but avoid panic on edge cases
     let Some(node) = self.stack.pop() else { return };
+    self.pop_tokenizer_context();
 
     // Leaving the element that opened the current hidden subtree (filter).
     if self.hidden_since_depth == Some(node.depth) {
@@ -1113,7 +1133,8 @@ impl ConvertState {
         self.depth -= 1;
         self.has_encoded_html_entity = false;
         self.just_closed_tag = true;
-        self.in_non_nesting = self.stack.last().is_some_and(|n| n.is_non_nesting);
+        self.in_non_nesting = self.stack.last().is_some_and(|n| n.is_non_nesting)
+          && !self.is_supported_svg_integration_point();
         return;
       }
     }
@@ -1144,7 +1165,8 @@ impl ConvertState {
       }
     }
 
-    self.in_non_nesting = self.stack.last().is_some_and(|n| n.is_non_nesting);
+    self.in_non_nesting = self.stack.last().is_some_and(|n| n.is_non_nesting)
+      && !self.is_supported_svg_integration_point();
     self.depth -= 1;
     self.has_encoded_html_entity = false;
     self.just_closed_tag = true;
@@ -1196,8 +1218,8 @@ impl ConvertState {
     // solidus, and parse-error attributes belong to the rest of the end tag.
     let tag_name_raw = &html_chunk[tag_name_start..tag_name_end];
     let builtin_tag_id = crate::consts::get_tag_id_ci_bytes(tag_name_raw.as_bytes());
-    let tag_name: Cow<str> = if builtin_tag_id.is_some() {
-      Cow::Borrowed(tag_name_raw)
+    let tag_name: Cow<str> = if let Some(id) = builtin_tag_id {
+      Cow::Borrowed(TAG_NAMES[id as usize])
     } else if tag_name_raw.bytes().any(|b| b.is_ascii_uppercase()) {
       Cow::Owned(tag_name_raw.to_ascii_lowercase())
     } else {
@@ -1206,25 +1228,36 @@ impl ConvertState {
     // Closing tag may target an aliased custom element (e.g. </ex> where
     // tagOverrides: { ex: 'em' } opened a TAG_EM node). Resolve the alias
     // here so the close matches the open.
-    let tag_id = if builtin_tag_id.is_some() {
-      builtin_tag_id
-    } else {
-      self
-        .options
-        .plugins
-        .as_ref()
-        .and_then(|p| p.tag_overrides.as_ref())
-        .and_then(|ovs| {
-          ovs
-            .iter()
-            .find(|(k, _)| k == tag_name.as_ref())
-            .map(|(_, v)| v)
-        })
-        .and_then(|ov| ov.alias_tag_id)
-    };
+    let alias_tag_id = self
+      .options
+      .plugins
+      .as_ref()
+      .and_then(|p| p.tag_overrides.as_ref())
+      .and_then(|ovs| {
+        ovs
+          .iter()
+          .find(|(k, _)| k == tag_name.as_ref())
+          .map(|(_, v)| v)
+      })
+      .and_then(|ov| ov.alias_tag_id);
+    let tag_id = alias_tag_id.or(builtin_tag_id);
+
+    if builtin_tag_id == Some(TAG_BR) {
+      let open =
+        self.process_opening_tag("br", tag_id, Some(TAG_BR), alias_tag_id.is_some(), ">", 0);
+      if open.complete && !open.skip {
+        self.close_node();
+      }
+      self.just_closed_tag = true;
+      return CloseTagResult {
+        complete: true,
+        new_position: i + 1,
+      };
+    }
 
     if let Some(curr) = self.stack.last()
       && curr.is_non_nesting
+      && !self.is_supported_svg_integration_point()
       && curr.tag_id != tag_id
     {
       return CloseTagResult {
@@ -1237,15 +1270,14 @@ impl ConvertState {
     // resolved tag id. This keeps `</other>` from closing an unknown custom
     // element and keeps aliased `</ex>` from closing an unrelated built-in.
     let close_name: &str = tag_name.as_ref();
-    let needs_name_match = builtin_tag_id.is_none();
     let matches = |node: &ElementNode| -> bool {
       if node.tag_id != tag_id {
         return false;
       }
-      if !needs_name_match {
-        return true;
+      if let Some(custom_name) = node.custom_name.as_deref() {
+        return custom_name == close_name;
       }
-      node.custom_name.as_deref() == Some(close_name)
+      builtin_tag_id.is_some()
     };
 
     let mut matched = false;
@@ -1315,7 +1347,7 @@ impl ConvertState {
       return;
     };
 
-    let result = self.process_opening_tag("#cdata-section", tag_id, false, ">", 0);
+    let result = self.process_opening_tag("#cdata-section", tag_id, None, tag_id.is_some(), ">", 0);
     if !result.complete || result.skip {
       return;
     }
@@ -1335,9 +1367,7 @@ impl ConvertState {
         parent.child_text_node_index += 1;
       }
     }
-    if !result.self_closing {
-      self.close_node();
-    }
+    self.close_node();
   }
 
   /// Recycle a node into the pool, preserving its Attributes Vec allocation.

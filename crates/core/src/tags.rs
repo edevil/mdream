@@ -303,10 +303,20 @@ static TAG_HANDLERS: [Option<TagHandler>; MAX_TAG_ID] = {
 
   // Non-nesting elements
   t[TAG_TEXTAREA as usize] = Some(NON_NESTING_NO_SPACING);
-  t[TAG_IFRAME as usize] = Some(NON_NESTING_NO_SPACING);
-  t[TAG_NOFRAMES as usize] = Some(NON_NESTING_NO_SPACING);
   t[TAG_XMP as usize] = Some(NON_NESTING_NO_SPACING);
   t[TAG_PLAINTEXT as usize] = Some(NON_NESTING_NO_SPACING);
+  t[TAG_IFRAME as usize] = Some(TagHandler {
+    excludes_text_nodes: true,
+    ..NON_NESTING_NO_SPACING
+  });
+  t[TAG_NOFRAMES as usize] = Some(TagHandler {
+    excludes_text_nodes: true,
+    ..NON_NESTING_NO_SPACING
+  });
+  t[TAG_NOEMBED as usize] = Some(TagHandler {
+    excludes_text_nodes: true,
+    ..NON_NESTING_NO_SPACING
+  });
 
   t[TAG_NOSCRIPT as usize] = Some(TagHandler {
     excludes_text_nodes: true,

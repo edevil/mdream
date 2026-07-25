@@ -30,6 +30,7 @@ import {
   TAG_LI,
   TAG_OL,
   TAG_P,
+  TAG_PLAINTEXT,
   TAG_PRE,
   TAG_Q,
   TAG_S,
@@ -37,10 +38,12 @@ import {
   TAG_SPAN,
   TAG_STRIKE,
   TAG_STRONG,
+  TAG_SVG,
   TAG_TABLE,
   TAG_TD,
   TAG_TH,
   TAG_VAR,
+  TAG_XMP,
   TEXT_NODE,
 } from './const'
 import { finalizeParse, parseHtmlStream } from './parse'
@@ -245,6 +248,12 @@ function shouldAddSpacingBeforeText(lastChar: string, lastNode: ElementNode | Te
   if (lastNode?.tagHandler?.isInline) {
     return false
   }
+  if (lastNode?.type === TEXT_NODE
+    && lastNode.parent === textNode.parent
+    && (lastNode.index + 1 === textNode.index
+      || (!textNode.parent && lastNode.index === 0 && textNode.index === 0))) {
+    return false
+  }
   const firstChar = textNode.value[0]
   if (firstChar === ' ') {
     return false
@@ -425,6 +434,8 @@ const GFM_TEXT_NATIVE_TRIGGER = /[\\*_~`[<\r\n]/
 function mayNeedGfmTextEscape(value: string, buffer: string[], depthMap: Uint8Array, baseIndent = 0): boolean {
   if (value.search(GFM_TEXT_NATIVE_TRIGGER) !== -1)
     return true
+  if ((depthMap[TAG_XMP] || depthMap[TAG_PLAINTEXT] || depthMap[TAG_SVG]) && value.includes('&'))
+    return true
   if ((depthMap[TAG_TABLE] && value.includes('|'))
     || (depthMap[TAG_A] && value.includes(']'))
     || (depthMap[TAG_BLOCKQUOTE] && value.includes('>'))) {
@@ -485,7 +496,12 @@ function escapeGfmText(value: string, buffer: string[], depthMap: Uint8Array, ba
       continue
     }
 
-    let shouldEscape = code === 92 // \
+    const literalEntity = code === 38
+      && (depthMap[TAG_SVG]
+        || ((depthMap[TAG_XMP] || depthMap[TAG_PLAINTEXT])
+          && isEntityReferenceAfterAmpersand(value, index)))
+    let shouldEscape = literalEntity
+      || code === 92 // \
       || code === 42 // *
       || code === 95 // _
       || code === 126 // ~

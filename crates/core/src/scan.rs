@@ -64,44 +64,94 @@ pub(crate) fn process_comment_or_doctype(html_chunk: &str, position: usize) -> C
 pub(crate) fn process_tag_attributes(
   html_chunk: &str,
   position: usize,
-  tag_handler: Option<&crate::types::TagHandler>,
   skip_attrs: bool,
 ) -> (bool, usize, Attributes, bool) {
   let mut i = position;
   let bytes = html_chunk.as_bytes();
   let chunk_length = bytes.len();
 
-  let self_closing = tag_handler.is_some_and(|h| h.is_self_closing);
-  let mut inside_quote = false;
+  const BEFORE_NAME: u8 = 0;
+  const NAME: u8 = 1;
+  const AFTER_NAME: u8 = 2;
+  const BEFORE_VALUE: u8 = 3;
+  const QUOTED_VALUE: u8 = 4;
+  const AFTER_QUOTED_VALUE: u8 = 5;
+  const UNQUOTED_VALUE: u8 = 6;
+
+  let mut state = BEFORE_NAME;
   let mut quote_char: u8 = 0;
   let attr_start_pos = i;
 
   while i < chunk_length {
     let c = bytes[i];
 
-    if inside_quote {
-      if c == quote_char {
-        inside_quote = false;
-      }
-      i += 1;
-      continue;
-    } else if c == QUOTE_CHAR || c == APOS_CHAR {
-      inside_quote = true;
-      quote_char = c;
-    } else if c == SLASH_CHAR && i + 1 < chunk_length && bytes[i + 1] == GT_CHAR {
+    let self_closing = c == SLASH_CHAR
+      && matches!(state, BEFORE_NAME | NAME | AFTER_NAME | AFTER_QUOTED_VALUE)
+      && i + 1 < chunk_length
+      && bytes[i + 1] == GT_CHAR;
+    if self_closing {
       let attrs = if skip_attrs {
         Attributes::new()
       } else {
         parse_attributes(html_chunk[attr_start_pos..i].trim())
       };
       return (true, i + 2, attrs, true);
-    } else if c == GT_CHAR {
+    }
+    if c == GT_CHAR && state != QUOTED_VALUE {
       let attrs = if skip_attrs {
         Attributes::new()
       } else {
         parse_attributes(html_chunk[attr_start_pos..i].trim())
       };
-      return (true, i + 1, attrs, self_closing);
+      return (true, i + 1, attrs, false);
+    }
+
+    match state {
+      BEFORE_NAME => {
+        if !is_whitespace(c) {
+          state = NAME;
+        }
+      }
+      NAME => {
+        if is_whitespace(c) {
+          state = AFTER_NAME;
+        } else if c == EQUALS_CHAR {
+          state = BEFORE_VALUE;
+        }
+      }
+      AFTER_NAME => {
+        if c == EQUALS_CHAR {
+          state = BEFORE_VALUE;
+        } else if !is_whitespace(c) {
+          state = NAME;
+        }
+      }
+      BEFORE_VALUE => {
+        if c == QUOTE_CHAR || c == APOS_CHAR {
+          state = QUOTED_VALUE;
+          quote_char = c;
+        } else if !is_whitespace(c) {
+          state = UNQUOTED_VALUE;
+        }
+      }
+      QUOTED_VALUE => {
+        if c == quote_char {
+          state = AFTER_QUOTED_VALUE;
+        }
+      }
+      AFTER_QUOTED_VALUE => {
+        if is_whitespace(c) {
+          state = BEFORE_NAME;
+        } else {
+          state = NAME;
+        }
+      }
+      UNQUOTED_VALUE => {
+        if is_whitespace(c) {
+          state = BEFORE_NAME;
+        }
+      }
+      _ => unreachable!(),
     }
 
     i += 1;
@@ -297,10 +347,37 @@ mod tests {
   fn process_tag_attributes_finds_close() {
     // "<a href=\"x\">" — scan from after the tag name
     let html = "a href=\"x\">rest";
-    let (complete, new_pos, attrs, self_closing) = process_tag_attributes(html, 1, None, false);
+    let (complete, new_pos, attrs, self_closing) = process_tag_attributes(html, 1, false);
     assert!(complete);
     assert!(!self_closing);
     assert_eq!(&html[new_pos..], "rest");
     assert_eq!(attrs.get("href").map(String::as_str), Some("x"));
+  }
+
+  #[test]
+  fn solidus_in_unquoted_value_is_not_a_self_closing_marker() {
+    let (complete, _, attrs, self_closing) = process_tag_attributes(" data=x/>", 0, false);
+    assert!(complete);
+    assert!(!self_closing);
+    assert_eq!(attrs.get("data").map(String::as_str), Some("x/"));
+
+    let (complete, _, attrs, self_closing) = process_tag_attributes(" data=x=/>", 0, false);
+    assert!(complete);
+    assert!(!self_closing);
+    assert_eq!(attrs.get("data").map(String::as_str), Some("x=/"));
+
+    let (complete, _, attrs, self_closing) = process_tag_attributes(" data=/>", 0, false);
+    assert!(complete);
+    assert!(!self_closing);
+    assert_eq!(attrs.get("data").map(String::as_str), Some("/"));
+
+    let (complete, _, attrs, self_closing) = process_tag_attributes(" data=x />", 0, false);
+    assert!(complete);
+    assert!(self_closing);
+    assert_eq!(attrs.get("data").map(String::as_str), Some("x"));
+
+    let (complete, _, _, self_closing) = process_tag_attributes(" href=/u =x/>", 0, false);
+    assert!(complete);
+    assert!(self_closing);
   }
 }

@@ -72,6 +72,7 @@ import {
   TAG_META,
   TAG_METER,
   TAG_NAV,
+  TAG_NOEMBED,
   TAG_NOFRAMES,
   TAG_NOSCRIPT,
   TAG_OL,
@@ -901,6 +902,7 @@ export const tagHandlers: Record<number, TagHandler> = {
   },
   [TAG_IFRAME]: {
     isNonNesting: true,
+    excludesTextNodes: true,
     spacing: NO_SPACING,
   },
   [TAG_MAP]: {
@@ -969,6 +971,12 @@ export const tagHandlers: Record<number, TagHandler> = {
   },
   [TAG_NOFRAMES]: {
     isNonNesting: true,
+    excludesTextNodes: true,
+    spacing: NO_SPACING,
+  },
+  [TAG_NOEMBED]: {
+    isNonNesting: true,
+    excludesTextNodes: true,
     spacing: NO_SPACING,
   },
   [TAG_XMP]: {
@@ -1140,6 +1148,7 @@ export function buildTagOverrideHandlers(overrides: Record<string, TagOverride |
       }
       if (override.isSelfClosing !== undefined) {
         handler.isSelfClosing = override.isSelfClosing
+        handler.overridesSelfClosing = true
       }
       if (override.collapsesInnerWhiteSpace !== undefined) {
         handler.collapsesInnerWhiteSpace = override.collapsesInnerWhiteSpace

@@ -117,6 +117,7 @@ const TAG_ID_TO_NAME: string[] = [
   'optgroup',
   's',
   'strike',
+  'noembed',
 ]
 
 function convertFilterForRust(filter: any): RustMdreamOptions['filter'] {
