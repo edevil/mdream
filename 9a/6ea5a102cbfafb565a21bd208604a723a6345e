@@ -1,0 +1,25 @@
+crates/core/src/convert/mod.rs
+  s_c981bfdadecfd1::t_be29b87dee9083 551,806,1020-1022,1028-1059,2094,2507
+crates/core/tests/conversion.rs
+  s_c981bfdadecfd1::t_5070cca49e98c4 6,321-322,325,1145,1156,1166,1175,1448-1449,1633,1639,1955
+packages/mdream/test/unit/__snapshots__/splitter.test.ts.snap
+  s_c981bfdadecfd1::t_78be8868c0e655 312
+packages/mdream/test/unit/templates/__snapshots__/wiki.test.ts.snap
+  s_c981bfdadecfd1::t_7d3516dfa9d46f 22-33,55-66
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "9a6ea5a102cbfafb565a21bd208604a723a6345e",
+  "prompts": {},
+  "sessions": {
+    "s_c981bfdadecfd1": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_06556025effekboC4xhl70KFEh",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "André Cruz <acruz@cloudflare.com>"
+    }
+  }
+}
