@@ -1369,7 +1369,11 @@ impl ConvertState {
       self.last_content_cache_len = additional;
       self.buffer.push_str(text);
     } else {
-      self.last_content_cache_len = text.len();
+      self.last_content_cache_len = if continues_previous_text {
+        self.last_content_cache_len.saturating_add(text.len())
+      } else {
+        text.len()
+      };
       if !self.push_output_str(text) {
         return;
       }

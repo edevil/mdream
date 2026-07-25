@@ -121,6 +121,17 @@ describe('streaming parity with the Rust core', () => {
     await expectStreamingParity(html)
   })
 
+  it.each([
+    '<p>before</p><!-- comment with > and --!><p>after</p>',
+    '<p>before</p><![CDATA[ignored <tag> text]]><p>after</p>',
+    '<p data-value="a > b < c">quoted attribute</p>',
+    `<p data-value='a > b < c'>single quoted attribute</p>`,
+    '<p>&copy;cat &#65copy; &#x41zz; &bogus;</p>',
+    '<p>--- not a rule</p><p>123456789. item</p>',
+  ])('keeps lexical carry stable for %s', async (html) => {
+    await expectStreamingParity(html)
+  })
+
   it('keeps a meaningful non breaking space before an inline sibling', async () => {
     await expectStreamingParity('<p>answered on <span>03 Apr 2013,&nbsp;</span><span>09:53 AM</span></p>')
   })

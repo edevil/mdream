@@ -1,6 +1,7 @@
 use crate::consts::*;
 use crate::entities::{
   decode_html_entities, decode_html_entities_for_markdown, is_entity_reference_after_ampersand,
+  max_entity_name_length,
 };
 use crate::scan::{
   is_whitespace, process_bogus_comment, process_comment_or_doctype, process_tag_attributes,
@@ -204,6 +205,7 @@ const SCRIPT_DATA_ESCAPED_DASH_DASH: u8 = 3;
 const SCRIPT_DATA_DOUBLE_ESCAPED: u8 = 4;
 const SCRIPT_DATA_DOUBLE_ESCAPED_DASH: u8 = 5;
 const SCRIPT_DATA_DOUBLE_ESCAPED_DASH_DASH: u8 = 6;
+const TEXT_LOOKBEHIND: usize = 64;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum TextMode {
@@ -583,6 +585,7 @@ pub struct ConvertState {
   pre_own_fence: bool,
   streaming_limit: Option<usize>,
   streaming_error: Option<StreamingError>,
+  incremental_lexing: bool,
   #[cfg(test)]
   gfm_escape_slow_path_calls: usize,
 }
@@ -780,6 +783,7 @@ impl ConvertState {
       pre_own_fence: false,
       streaming_limit,
       streaming_error: None,
+      incremental_lexing: false,
       #[cfg(test)]
       gfm_escape_slow_path_calls: 0,
     };
@@ -848,6 +852,19 @@ impl ConvertState {
 
   pub(crate) fn streaming_error(&self) -> Option<StreamingError> {
     self.streaming_error
+  }
+
+  pub(crate) fn enable_incremental_lexing(&mut self) {
+    self.incremental_lexing = true;
+  }
+
+  fn flush_stable_text_prefix(&mut self, text_buffer: &mut String) -> bool {
+    if !self.incremental_lexing || text_buffer.len() < TEXT_LOOKBEHIND {
+      return false;
+    }
+    self.process_text_buffer(text_buffer);
+    text_buffer.clear();
+    true
   }
 
   pub(crate) fn retained_buffered_bytes(&self) -> usize {
@@ -1239,7 +1256,7 @@ impl ConvertState {
 
   #[inline]
   fn push_script_text(&mut self, text: &str) {
-    if text.is_empty() {
+    if text.is_empty() || !self.has_extraction {
       return;
     }
     if let Some(limit) = self.streaming_limit {
@@ -1383,7 +1400,7 @@ impl ConvertState {
         {
           let start = i;
           i += 1;
-          while i < chunk_length {
+          while i < chunk_length && (!self.incremental_lexing || i - start < TEXT_LOOKBEHIND) {
             let c = bytes[i];
             if c <= 32
               || c >= 0x80
@@ -1401,6 +1418,9 @@ impl ConvertState {
           self.text_buffer_contains_non_whitespace = true;
           self.last_char_was_whitespace = false;
           self.just_closed_tag = false;
+          if self.flush_stable_text_prefix(&mut text_buffer) {
+            run_start = i;
+          }
           continue;
         }
 
@@ -1412,7 +1432,10 @@ impl ConvertState {
           && (self.depth_map[TAG_SCRIPT as usize] > 0 || self.depth_map[TAG_STYLE as usize] > 0)
         {
           let start = i;
-          while i < chunk_length && bytes[i] != LT_CHAR {
+          while i < chunk_length
+            && bytes[i] != LT_CHAR
+            && (!self.incremental_lexing || i - start < TEXT_LOOKBEHIND)
+          {
             i += 1;
           }
           if !self.push_parse_str(&mut text_buffer, &chunk[start..i]) {
@@ -1421,6 +1444,9 @@ impl ConvertState {
           self.text_buffer_contains_non_whitespace = true;
           self.last_char_was_whitespace = false;
           self.just_closed_tag = false;
+          if self.flush_stable_text_prefix(&mut text_buffer) {
+            run_start = i;
+          }
           continue;
         }
 
@@ -1431,6 +1457,15 @@ impl ConvertState {
             .and_then(|overflow| overflow.raw_name.as_ref().map(|_| overflow.raw_mode))
             .unwrap_or_else(|| self.text_mode());
           if text_mode != TextMode::RawText && text_mode != TextMode::PlainText {
+            if Self::incomplete_entity_at_end(&bytes[i..]) {
+              if !text_buffer.is_empty() {
+                self.process_text_buffer(&mut text_buffer);
+                text_buffer.clear();
+              }
+              run_start = i;
+              carry = true;
+              break;
+            }
             self.has_encoded_html_entity = true;
           }
         }
@@ -1476,11 +1511,16 @@ impl ConvertState {
               break;
             }
             i += ch.len_utf8();
-
+            if self.flush_stable_text_prefix(&mut text_buffer) {
+              run_start = i;
+            }
             continue;
           }
         }
         i += 1;
+        if self.flush_stable_text_prefix(&mut text_buffer) {
+          run_start = i;
+        }
         continue;
       }
 
@@ -1831,7 +1871,11 @@ impl ConvertState {
     // chunk may extend) RAW from `run_start`, never the decoded+escaped
     // `text_buffer`; re-processing re-derives it so nothing is double-applied.
     // Otherwise reuse the allocation (the common non-streaming case).
-    if carry || !text_buffer.is_empty() {
+    if !carry && self.incremental_lexing && !text_buffer.is_empty() {
+      carry = true;
+    }
+
+    if carry {
       let leftover = chunk[run_start..].to_string();
       text_buffer.clear();
       self.parse_text_buffer = if self.streaming_limit.is_some() && text_buffer.is_empty() {
@@ -1848,6 +1892,10 @@ impl ConvertState {
       }
       leftover
     } else {
+      if !text_buffer.is_empty() {
+        self.process_text_buffer(&mut text_buffer);
+        text_buffer.clear();
+      }
       self.parse_text_buffer = if self.streaming_limit.is_some() && text_buffer.is_empty() {
         String::new()
       } else {
@@ -1855,6 +1903,36 @@ impl ConvertState {
       };
       String::new()
     }
+  }
+
+  fn incomplete_entity_at_end(bytes: &[u8]) -> bool {
+    debug_assert_eq!(bytes.first(), Some(&AMPERSAND_CHAR));
+    if bytes.len() == 1 {
+      return true;
+    }
+    if bytes[1] == b'#' {
+      let mut index = 2;
+      let hex = matches!(bytes.get(index), Some(b'x' | b'X'));
+      if hex {
+        index += 1;
+      }
+      while let Some(&byte) = bytes.get(index) {
+        if byte.is_ascii_digit() || (hex && byte.is_ascii_hexdigit()) {
+          index += 1;
+        } else {
+          return byte == b';' && index + 1 == bytes.len();
+        }
+      }
+      return true;
+    }
+    let mut index = 1;
+    while bytes.get(index).is_some_and(u8::is_ascii_alphanumeric) {
+      index += 1;
+      if index - 1 > max_entity_name_length() {
+        return false;
+      }
+    }
+    index == bytes.len() || (bytes.get(index) == Some(&b';') && index + 1 == bytes.len())
   }
 
   pub fn get_markdown(&mut self) -> String {

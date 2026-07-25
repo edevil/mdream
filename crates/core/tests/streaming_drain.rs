@@ -285,6 +285,20 @@ fn streaming_drops_script_without_disturbing_neighbors() {
   }
 }
 
+#[test]
+fn streaming_lexical_carry_matches_every_split() {
+  for html in [
+    "<p>before</p><!-- comment with > and --!><p>after</p>",
+    "<p>before</p><![CDATA[ignored <tag> text]]><p>after</p>",
+    "<p data-value=\"a > b < c\">quoted attribute</p>",
+    "<p data-value='a > b < c'>single quoted attribute</p>",
+    "<p>&copy;cat &#65copy; &#x41zz; &bogus;</p>",
+    "<p>--- not a rule</p><p>123456789. item</p>",
+  ] {
+    assert_stream_matches_every_split(html, HTMLToMarkdownOptions::default());
+  }
+}
+
 // Regression: the streaming buffer was sliced/drained on raw byte offsets that
 // could land mid-codepoint, panicking on non-ASCII input.
 #[test]

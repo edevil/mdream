@@ -8,6 +8,10 @@ use generated::{
   lookup_named_entity,
 };
 
+pub(crate) const fn max_entity_name_length() -> usize {
+  MAX_ENTITY_NAME_LENGTH
+}
+
 #[inline]
 pub(crate) fn decode_html_entities(text: &str) -> Cow<'_, str> {
   decode_html_entities_in_context(text, false, false)

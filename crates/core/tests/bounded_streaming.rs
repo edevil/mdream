@@ -189,6 +189,49 @@ fn closed_script_releases_parser_scratch_capacity() {
 }
 
 #[test]
+fn one_byte_text_streams_through_a_bounded_window() {
+  const INPUT_LEN: usize = 1024 * 1024;
+  const LIMIT: usize = 512;
+  let mut processor =
+    BoundedMarkdownStreamProcessor::new(HTMLToMarkdownOptions::default(), limits(LIMIT)).unwrap();
+  let mut output_len = 0usize;
+
+  for _ in 0..INPUT_LEN {
+    output_len += processor.process_chunk("x").unwrap().len();
+    assert!(processor.buffered_capacity() <= LIMIT);
+  }
+  output_len += processor.finish().unwrap().len();
+
+  assert_eq!(output_len, INPUT_LEN);
+  assert!(processor.buffered_capacity() <= LIMIT);
+}
+
+#[test]
+fn excluded_raw_text_does_not_retain_its_body() {
+  const LIMIT: usize = 512;
+  for tag in ["script", "style"] {
+    let mut processor =
+      BoundedMarkdownStreamProcessor::new(HTMLToMarkdownOptions::default(), limits(LIMIT)).unwrap();
+    assert_eq!(processor.process_chunk(&format!("<{tag}>")).unwrap(), "");
+    for _ in 0..256 {
+      assert_eq!(processor.process_chunk(&"x".repeat(8192)).unwrap(), "");
+      assert!(
+        processor.buffered_capacity() <= LIMIT,
+        "{tag} retained {} bytes",
+        processor.buffered_capacity()
+      );
+    }
+    assert_eq!(
+      processor
+        .process_chunk(&format!("</{tag}><p>ok</p>"))
+        .unwrap(),
+      "ok"
+    );
+    assert_eq!(processor.finish().unwrap(), "");
+  }
+}
+
+#[test]
 fn claimed_retained_state_is_observable() {
   let mut carry =
     BoundedMarkdownStreamProcessor::new(HTMLToMarkdownOptions::default(), limits(4096)).unwrap();

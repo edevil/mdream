@@ -10,6 +10,360 @@ pub mod types;
 pub(crate) mod url;
 
 use convert::ConvertState;
+use scan::is_whitespace;
+
+#[derive(Clone, Copy, Default)]
+enum CarryState {
+  #[default]
+  Prefix,
+  TagName {
+    closing: bool,
+  },
+  Attributes {
+    state: u8,
+    quote: u8,
+  },
+  EndTagTail {
+    quote: u8,
+  },
+  Comment {
+    state: u8,
+  },
+  Cdata {
+    matched: u8,
+  },
+  BogusComment,
+  NamedEntity,
+  NumericEntity {
+    hex: bool,
+  },
+  EntityLookahead {
+    length: usize,
+  },
+  GfmText,
+}
+
+#[derive(Default)]
+struct CarryScanner {
+  state: CarryState,
+  scanned: usize,
+}
+
+impl CarryScanner {
+  const ATTR_BEFORE_NAME: u8 = 0;
+  const ATTR_NAME: u8 = 1;
+  const ATTR_AFTER_NAME: u8 = 2;
+  const ATTR_BEFORE_VALUE: u8 = 3;
+  const ATTR_QUOTED_VALUE: u8 = 4;
+  const ATTR_AFTER_QUOTED: u8 = 5;
+  const ATTR_UNQUOTED: u8 = 6;
+
+  fn reset(&mut self, carry: &str) {
+    self.state = CarryState::Prefix;
+    self.scanned = 0;
+    let _ = self.advance(carry);
+  }
+
+  fn advance(&mut self, carry: &str) -> bool {
+    let bytes = carry.as_bytes();
+    while self.scanned < bytes.len() {
+      match self.state {
+        CarryState::Prefix => {
+          if bytes[0] == b'&' {
+            if bytes.get(1) == Some(&b'#') {
+              if bytes.len() == 2 {
+                self.scanned = 2;
+                return false;
+              }
+              let hex = matches!(bytes.get(2), Some(b'x' | b'X'));
+              self.state = CarryState::NumericEntity { hex };
+              self.scanned = 2 + usize::from(hex);
+            } else {
+              self.state = CarryState::NamedEntity;
+              self.scanned = 1;
+            }
+            continue;
+          }
+          if bytes[0] != b'<' {
+            self.state = CarryState::GfmText;
+            continue;
+          }
+          if bytes.len() == 1 {
+            self.scanned = 1;
+            return false;
+          }
+          if bytes.starts_with(b"<!--") {
+            self.state = CarryState::Comment { state: 0 };
+            self.scanned = 4;
+          } else if bytes.starts_with(b"<![CDATA[") {
+            self.state = CarryState::Cdata { matched: 0 };
+            self.scanned = 9;
+          } else if b"<!--".starts_with(bytes) || b"<![CDATA[".starts_with(bytes) {
+            self.scanned = bytes.len();
+            return false;
+          } else if bytes.starts_with(b"<!") || bytes.starts_with(b"<?") {
+            self.state = CarryState::BogusComment;
+            self.scanned = 2;
+          } else if bytes.starts_with(b"</") {
+            self.state = CarryState::TagName { closing: true };
+            self.scanned = 2;
+          } else {
+            self.state = CarryState::TagName { closing: false };
+            self.scanned = 1;
+          }
+        }
+        CarryState::TagName { closing } => {
+          let byte = bytes[self.scanned];
+          self.scanned += 1;
+          if byte == b'>' {
+            return true;
+          }
+          if byte == b'/' || is_whitespace(byte) {
+            self.state = if closing {
+              CarryState::EndTagTail { quote: 0 }
+            } else {
+              CarryState::Attributes {
+                state: Self::ATTR_BEFORE_NAME,
+                quote: 0,
+              }
+            };
+          }
+        }
+        CarryState::Attributes { state, mut quote } => {
+          let byte = bytes[self.scanned];
+          self.scanned += 1;
+          if byte == b'>' && state != Self::ATTR_QUOTED_VALUE {
+            return true;
+          }
+          let next = match state {
+            Self::ATTR_BEFORE_NAME if !is_whitespace(byte) => Self::ATTR_NAME,
+            Self::ATTR_NAME if is_whitespace(byte) => Self::ATTR_AFTER_NAME,
+            Self::ATTR_NAME if byte == b'=' => Self::ATTR_BEFORE_VALUE,
+            Self::ATTR_AFTER_NAME if byte == b'=' => Self::ATTR_BEFORE_VALUE,
+            Self::ATTR_AFTER_NAME if !is_whitespace(byte) => Self::ATTR_NAME,
+            Self::ATTR_BEFORE_VALUE if matches!(byte, b'\'' | b'"') => {
+              quote = byte;
+              Self::ATTR_QUOTED_VALUE
+            }
+            Self::ATTR_BEFORE_VALUE if !is_whitespace(byte) => Self::ATTR_UNQUOTED,
+            Self::ATTR_QUOTED_VALUE if byte == quote => Self::ATTR_AFTER_QUOTED,
+            Self::ATTR_AFTER_QUOTED if is_whitespace(byte) => Self::ATTR_BEFORE_NAME,
+            Self::ATTR_AFTER_QUOTED => Self::ATTR_NAME,
+            Self::ATTR_UNQUOTED if is_whitespace(byte) => Self::ATTR_BEFORE_NAME,
+            _ => state,
+          };
+          self.state = CarryState::Attributes { state: next, quote };
+        }
+        CarryState::EndTagTail { mut quote } => {
+          let byte = bytes[self.scanned];
+          self.scanned += 1;
+          if quote != 0 {
+            if byte == quote {
+              quote = 0;
+            }
+          } else if matches!(byte, b'\'' | b'"') {
+            quote = byte;
+          } else if byte == b'>' {
+            return true;
+          }
+          self.state = CarryState::EndTagTail { quote };
+        }
+        CarryState::Comment { mut state } => {
+          let byte = bytes[self.scanned];
+          self.scanned += 1;
+          if matches!(state, 0 | 1 | 4 | 5) && byte == b'>' {
+            return true;
+          }
+          state = match state {
+            0 if byte == b'-' => 1,
+            0 => 2,
+            1 if byte == b'-' => 4,
+            1 => 2,
+            2 if byte == b'-' => 3,
+            2 => 2,
+            3 if byte == b'-' => 4,
+            3 => 2,
+            4 if byte == b'!' => 5,
+            4 if byte == b'-' => 4,
+            4 => 2,
+            5 if byte == b'-' => 3,
+            5 => 2,
+            _ => state,
+          };
+          self.state = CarryState::Comment { state };
+        }
+        CarryState::Cdata { mut matched } => {
+          let byte = bytes[self.scanned];
+          self.scanned += 1;
+          matched = match (matched, byte) {
+            (0, b']') => 1,
+            (1, b']') => 2,
+            (2, b'>') => return true,
+            (2, b']') => 2,
+            (_, b']') => 1,
+            _ => 0,
+          };
+          self.state = CarryState::Cdata { matched };
+        }
+        CarryState::BogusComment => {
+          let byte = bytes[self.scanned];
+          self.scanned += 1;
+          if byte == b'>' {
+            return true;
+          }
+        }
+        CarryState::NamedEntity => {
+          let byte = bytes[self.scanned];
+          self.scanned += 1;
+          if byte == b';' {
+            self.state = CarryState::EntityLookahead { length: 0 };
+          } else if !byte.is_ascii_alphanumeric()
+            || self.scanned - 1 > entities::max_entity_name_length()
+          {
+            return true;
+          }
+        }
+        CarryState::NumericEntity { hex } => {
+          let byte = bytes[self.scanned];
+          self.scanned += 1;
+          if byte == b';' {
+            self.state = CarryState::EntityLookahead { length: 0 };
+          } else if !(byte.is_ascii_digit() || (hex && byte.is_ascii_hexdigit())) {
+            return true;
+          }
+        }
+        CarryState::EntityLookahead { mut length } => {
+          let byte = bytes[self.scanned];
+          self.scanned += 1;
+          if byte == b';' {
+            return true;
+          }
+          if !(byte.is_ascii_alphanumeric() || length == 0 && byte == b'#') {
+            return true;
+          }
+          length += 1;
+          if length > entities::max_entity_name_length() + 2 {
+            return true;
+          }
+          self.state = CarryState::EntityLookahead { length };
+        }
+        CarryState::GfmText => return Self::gfm_text_complete(bytes),
+      }
+    }
+    false
+  }
+
+  fn gfm_text_complete(bytes: &[u8]) -> bool {
+    if bytes.len() >= 64 || bytes.contains(&b'<') {
+      return true;
+    }
+    let mut index = 0;
+    while index < bytes.len() && bytes[index] == b' ' && index < 3 {
+      index += 1;
+    }
+    let Some(&marker) = bytes.get(index) else {
+      return false;
+    };
+    match marker {
+      b'#' => {
+        let start = index;
+        while bytes.get(index) == Some(&b'#') {
+          index += 1;
+        }
+        index < bytes.len() || index - start > 6
+      }
+      b'+' => index + 1 < bytes.len(),
+      b'-' => {
+        let markers = bytes[index..].iter().filter(|&&byte| byte == b'-').count();
+        markers >= 3
+          || bytes[index..]
+            .iter()
+            .any(|byte| !matches!(byte, b'-' | b' ' | b'\t'))
+      }
+      b'0'..=b'9' => {
+        let start = index;
+        while bytes.get(index).is_some_and(u8::is_ascii_digit) && index - start < 9 {
+          index += 1;
+        }
+        if index == bytes.len() {
+          false
+        } else if index - start > 9 || !matches!(bytes[index], b'.' | b')') {
+          true
+        } else {
+          index + 1 < bytes.len()
+        }
+      }
+      _ => false,
+    }
+  }
+
+  fn compact_numeric(&mut self, carry: &mut String) {
+    let CarryState::NumericEntity { hex } = self.state else {
+      return;
+    };
+    let digit_start = 2 + usize::from(hex);
+    if carry.len() <= digit_start + 16 {
+      return;
+    }
+    let radix = if hex { 16 } else { 10 };
+    let mut value = 0u32;
+    for byte in carry.as_bytes()[digit_start..].iter().copied() {
+      let digit = if byte.is_ascii_digit() {
+        u32::from(byte - b'0')
+      } else {
+        u32::from((byte | 32) - b'a' + 10)
+      };
+      value = value
+        .saturating_mul(radix)
+        .saturating_add(digit)
+        .min(0x11_0000);
+    }
+    *carry = if hex {
+      format!("&#x{value:X}")
+    } else {
+      format!("&#{value}")
+    };
+    self.reset(carry);
+  }
+}
+
+#[cfg(test)]
+mod carry_scanner_tests {
+  use super::CarryScanner;
+
+  #[test]
+  fn unfinished_quoted_tag_scans_only_appended_bytes() {
+    let mut carry = String::from("<a title=\"");
+    let mut scanner = CarryScanner::default();
+    scanner.reset(&carry);
+
+    for _ in 0..32 * 1024 {
+      carry.push('x');
+      assert!(!scanner.advance(&carry));
+      assert_eq!(scanner.scanned, carry.len());
+    }
+
+    carry.push_str("\">text");
+    assert!(scanner.advance(&carry));
+  }
+
+  #[test]
+  fn oversized_numeric_entity_carry_is_compacted() {
+    let mut carry = String::from("&#");
+    let mut scanner = CarryScanner::default();
+    scanner.reset(&carry);
+    for _ in 0..1024 {
+      carry.push('9');
+      assert!(!scanner.advance(&carry));
+      scanner.compact_numeric(&mut carry);
+      assert!(carry.len() <= 20);
+    }
+    carry.push(';');
+    assert!(!scanner.advance(&carry));
+    carry.push(' ');
+    assert!(scanner.advance(&carry));
+  }
+}
 
 // Re-export the public option/config types at the crate root so `use mdream::*`
 // pulls in everything needed to call `html_to_markdown` without reaching into
@@ -86,6 +440,7 @@ pub fn html_to_format_result(
 pub struct MarkdownStreamProcessor {
   state: ConvertState,
   buffer: String,
+  carry_scanner: CarryScanner,
 }
 
 impl MarkdownStreamProcessor {
@@ -95,9 +450,12 @@ impl MarkdownStreamProcessor {
 
   /// Create a streaming converter for the requested output format.
   pub fn new_with_format(options: HTMLToMarkdownOptions, format: OutputFormat) -> Self {
+    let mut state = ConvertState::new(options, 4096, format);
+    state.enable_incremental_lexing();
     Self {
-      state: ConvertState::new(options, 4096, format),
+      state,
       buffer: String::new(),
+      carry_scanner: CarryScanner::default(),
     }
   }
 
@@ -112,10 +470,16 @@ impl MarkdownStreamProcessor {
   pub fn process_chunk(&mut self, chunk: &str) -> String {
     if self.buffer.is_empty() {
       self.buffer = self.state.process_html(chunk);
+      self.carry_scanner.reset(&self.buffer);
     } else {
       self.buffer.push_str(chunk);
-      let full = std::mem::take(&mut self.buffer);
-      self.buffer = self.state.process_html(&full);
+      if self.carry_scanner.advance(&self.buffer) {
+        let full = std::mem::take(&mut self.buffer);
+        self.buffer = self.state.process_html(&full);
+        self.carry_scanner.reset(&self.buffer);
+      } else {
+        self.carry_scanner.compact_numeric(&mut self.buffer);
+      }
     }
     self.state.get_markdown_chunk()
   }
@@ -141,6 +505,7 @@ impl MarkdownStreamProcessor {
 pub struct BoundedMarkdownStreamProcessor {
   state: ConvertState,
   buffer: String,
+  carry_scanner: CarryScanner,
   terminal_error: Option<StreamingError>,
 }
 
@@ -176,9 +541,12 @@ impl BoundedMarkdownStreamProcessor {
       }
     }
 
+    let mut state = ConvertState::new_bounded(options, format, limits.max_buffered_bytes);
+    state.enable_incremental_lexing();
     Ok(Self {
-      state: ConvertState::new_bounded(options, format, limits.max_buffered_bytes),
+      state,
       buffer: String::new(),
+      carry_scanner: CarryScanner::default(),
       terminal_error: None,
     })
   }
@@ -224,12 +592,20 @@ impl BoundedMarkdownStreamProcessor {
         return Err(self.fail(error));
       }
       self.buffer.push_str(chunk);
+      if !self.carry_scanner.advance(&self.buffer) {
+        self.carry_scanner.compact_numeric(&mut self.buffer);
+        self.check_error()?;
+        let output = self.state.get_markdown_chunk();
+        self.state.release_closed_high_water();
+        return Ok(output);
+      }
       let full = std::mem::take(&mut self.buffer);
       self.state.process_html(&full)
     };
 
     self.check_error()?;
     self.retain_carry(&carry)?;
+    self.carry_scanner.reset(&self.buffer);
     let output = self.state.get_markdown_chunk();
     self.check_error()?;
     self.state.release_closed_high_water();

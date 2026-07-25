@@ -36,6 +36,12 @@ const recentMergeCases: ParityCase[] = [
   { html: '<img src="/i&#9;m" alt="line&#10;two &amp;copy;" title="t&#13;u &amp;reg;">' },
   { html: '<table><tr><td><a href="/a|b" title="t|u">link</a></td><td><img src="/i|m" alt="a|b" title="x|y"></td></tr></table>' },
   { html: '<a href="https://example.test/a&#127;b">https://example.test/a&#127;b</a>' },
+  { html: '<p>before</p><!-- comment with > and --!><p>after</p>' },
+  { html: '<p>before</p><![CDATA[ignored text]]><p>after</p>' },
+  { html: '<p data-value="a > b < c">quoted attribute</p>' },
+  { html: `<p data-value='a > b < c'>single quoted attribute</p>` },
+  { html: '<p>&copy;cat &#65copy; &#x41zz; &bogus;</p>' },
+  { html: '<p>--- not a rule</p><p>123456789. item</p>' },
 ]
 
 async function streamConvert(engine: TestEngine, { html, options }: ParityCase, chunkSize: number): Promise<string> {
