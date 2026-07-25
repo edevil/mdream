@@ -45,6 +45,13 @@ impl Attributes {
   }
 
   #[inline]
+  pub(crate) fn insert_if_absent(&mut self, key: String, value: String) {
+    if !self.contains_key(&key) {
+      self.inner.push((key, value));
+    }
+  }
+
+  #[inline]
   pub fn is_empty(&self) -> bool {
     self.inner.is_empty()
   }

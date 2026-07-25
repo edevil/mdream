@@ -1,30 +1,65 @@
 import { describe, expect, it } from 'vitest'
-import { engines, htmlToMarkdown, resolveEngine } from '../utils/engines'
+import { engines, resolveEngine } from '../utils/engines'
 
-describe.each(engines)('malformed html %s', ({ name: _name, engine }) => {
-  describe.skip('correctly tracks element depth in nested structures', () => {
-    it('handles incorrectly nested tags that overlap', async () => {
-      const html = '<p><strong>Bold text <em>Bold and italic</strong> just italic</em></p>'
-      const markdown = htmlToMarkdown(html, { engine: await resolveEngine(engine) })
+async function streamConvert(engine: Awaited<ReturnType<typeof resolveEngine>>, html: string, split: number): Promise<string> {
+  const stream = new ReadableStream<string>({
+    start(controller) {
+      controller.enqueue(html.slice(0, split))
+      controller.enqueue(html.slice(split))
+      controller.close()
+    },
+  })
+  let output = ''
+  for await (const chunk of engine.streamHtmlToMarkdown(stream))
+    output += chunk
+  return output
+}
 
-      // The parser should maintain emphasis even though tags are improperly nested
-      expect(markdown).toContain('**Bold text *Bold and italic** just italic*')
-    })
+describe.each(engines)('malformed HTML tokenizer parity: $name', ({ engine: engineHandle }) => {
+  it('matches HTML recovery and streaming boundaries', async () => {
+    const engine = await resolveEngine(engineHandle)
+    const cases = [
+      ['<p>I <3 Rust</p>', 'I <3 Rust'],
+      ['<p>I < 3 Rust</p>', 'I < 3 Rust'],
+      ['<p>I <> Rust</p>', 'I <> Rust'],
+      ['<p>I <<em>love</em> Rust</p>', 'I <*love* Rust'],
+      ['<3', '<3'],
+      ['< 3', '< 3'],
+      ['<>', '<>'],
+      ['<', '<'],
+      ['</', '\\</'],
+      ['before<a', 'before'],
+      ['<p>before</>after', 'beforeafter'],
+      ['<p>before</>', 'before'],
+      ['<?pi?>after', 'after'],
+      ['</3>after', 'after'],
+      ['</>after', 'after'],
+      ['<!foo>after', 'after'],
+      ['before<!-->after', 'beforeafter'],
+      ['before<!--->after', 'beforeafter'],
+      ['before<!--x--!>after', 'beforeafter'],
+      ['before<!--x--->after', 'beforeafter'],
+      ['before<!--x', 'before'],
+      ['before<!foo', 'before'],
+      ['before<?pi', 'before'],
+      ['<a href=/first HREF=/second>link</a>', '[link](/first)'],
+      ['<img src=/first SRC=/second alt=first ALT=second>', '![first](/first)'],
+    ] as const
+    for (const [html, expected] of cases) {
+      expect(engine.htmlToMarkdown(html), html).toBe(expected)
+      for (let split = 0; split <= html.length; split++)
+        expect(await streamConvert(engine, html, split), `${html} split at ${split}`).toBe(expected)
+    }
+  })
 
-    it('recovers from malformed attributes in tags', async () => {
-      const html = '<a href="https://example.com" title="missing quote>Link text</a>'
-      const markdown = htmlToMarkdown(html, { engine: await resolveEngine(engine) })
-
-      // The parser should still create a link despite the malformed attribute
-      expect(markdown).toContain('[Link text](https://example.com)')
-    })
-
-    it('handles broken HTML comments appropriately', async () => {
-      const html = '<!-- This comment is not closed <p>This paragraph should be visible</p>'
-      const markdown = htmlToMarkdown(html, { engine: await resolveEngine(engine) })
-
-      // The parser should still process content after a broken comment
-      expect(markdown).toContain('This paragraph should be visible')
-    })
+  it('keeps invalid opener text in one Tailwind-formatted run', async () => {
+    const engine = await resolveEngine(engineHandle)
+    for (const [html, expected] of [
+      ['<span class="italic">a<3 b</span>', '*a<3 b*'],
+      ['<span class="italic">a< b</span>', '*a< b*'],
+      ['<span class="italic">a<>b</span>', '*a<>b*'],
+    ] as const) {
+      expect(engine.htmlToMarkdown(html, { plugins: { tailwind: true } }), html).toBe(expected)
+    }
   })
 })

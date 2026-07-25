@@ -21,6 +21,24 @@ pub(crate) struct CommentResult {
   pub(crate) new_position: usize,
 }
 
+pub(crate) fn process_bogus_comment(html_chunk: &str, position: usize) -> CommentResult {
+  let bytes = html_chunk.as_bytes();
+  let mut i = position + 2;
+  while i < bytes.len() {
+    if bytes[i] == GT_CHAR {
+      return CommentResult {
+        complete: true,
+        new_position: i + 1,
+      };
+    }
+    i += 1;
+  }
+  CommentResult {
+    complete: false,
+    new_position: position,
+  }
+}
+
 pub(crate) fn process_comment_or_doctype(html_chunk: &str, position: usize) -> CommentResult {
   let mut i = position;
   let bytes = html_chunk.as_bytes();
@@ -28,14 +46,55 @@ pub(crate) fn process_comment_or_doctype(html_chunk: &str, position: usize) -> C
 
   if i + 3 < chunk_length && bytes[i + 2] == DASH_CHAR && bytes[i + 3] == DASH_CHAR {
     i += 4;
-    while i < chunk_length - 2 {
-      if bytes[i] == DASH_CHAR && bytes[i + 1] == DASH_CHAR && bytes[i + 2] == GT_CHAR {
-        i += 3;
-        return CommentResult {
-          complete: true,
-          new_position: i,
-        };
-      }
+    const START: u8 = 0;
+    const START_DASH: u8 = 1;
+    const COMMENT: u8 = 2;
+    const END_DASH: u8 = 3;
+    const END: u8 = 4;
+    const END_BANG: u8 = 5;
+    let mut state = START;
+    while i < chunk_length {
+      let c = bytes[i];
+      state = match state {
+        START if c == GT_CHAR => {
+          return CommentResult {
+            complete: true,
+            new_position: i + 1,
+          };
+        }
+        START if c == DASH_CHAR => START_DASH,
+        START => COMMENT,
+        START_DASH if c == GT_CHAR => {
+          return CommentResult {
+            complete: true,
+            new_position: i + 1,
+          };
+        }
+        START_DASH if c == DASH_CHAR => END,
+        START_DASH => COMMENT,
+        COMMENT if c == DASH_CHAR => END_DASH,
+        COMMENT => COMMENT,
+        END_DASH if c == DASH_CHAR => END,
+        END_DASH => COMMENT,
+        END if c == GT_CHAR => {
+          return CommentResult {
+            complete: true,
+            new_position: i + 1,
+          };
+        }
+        END if c == b'!' => END_BANG,
+        END if c == DASH_CHAR => END,
+        END => COMMENT,
+        END_BANG if c == GT_CHAR => {
+          return CommentResult {
+            complete: true,
+            new_position: i + 1,
+          };
+        }
+        END_BANG if c == DASH_CHAR => END_DASH,
+        END_BANG => COMMENT,
+        _ => unreachable!(),
+      };
       i += 1;
     }
     CommentResult {
@@ -43,21 +102,7 @@ pub(crate) fn process_comment_or_doctype(html_chunk: &str, position: usize) -> C
       new_position: position,
     }
   } else {
-    i += 2;
-    while i < chunk_length {
-      if bytes[i] == GT_CHAR {
-        i += 1;
-        return CommentResult {
-          complete: true,
-          new_position: i,
-        };
-      }
-      i += 1;
-    }
-    CommentResult {
-      complete: false,
-      new_position: i,
-    }
+    process_bogus_comment(html_chunk, position)
   }
 }
 
@@ -217,7 +262,7 @@ pub(crate) fn parse_attributes(attr_str: &str) -> Attributes {
           // Single-pass lowercase: the result is owned either way,
           // so the uppercase pre-scan would only add a redundant pass.
           let name = raw.to_ascii_lowercase();
-          result.insert(name, String::new());
+          result.insert_if_absent(name, String::new());
           state = NAME;
           name_start = i;
         }
@@ -240,7 +285,7 @@ pub(crate) fn parse_attributes(attr_str: &str) -> Attributes {
           // Single-pass lowercase: the result is owned either way,
           // so the uppercase pre-scan would only add a redundant pass.
           let name = raw.to_ascii_lowercase();
-          result.insert(
+          result.insert_if_absent(
             name,
             decode_html_attribute_entities(&attr_str[value_start..i]).into_owned(),
           );
@@ -253,7 +298,7 @@ pub(crate) fn parse_attributes(attr_str: &str) -> Attributes {
           // Single-pass lowercase: the result is owned either way,
           // so the uppercase pre-scan would only add a redundant pass.
           let name = raw.to_ascii_lowercase();
-          result.insert(
+          result.insert_if_absent(
             name,
             decode_html_attribute_entities(&attr_str[value_start..i]).into_owned(),
           );
@@ -268,18 +313,18 @@ pub(crate) fn parse_attributes(attr_str: &str) -> Attributes {
   if state == NAME {
     let raw = &attr_str[name_start..];
     let lc = raw.to_ascii_lowercase();
-    result.insert(lc, String::new());
+    result.insert_if_absent(lc, String::new());
   } else if state == UNQUOTED_VALUE {
     let raw = &attr_str[name_start_saved..name_end_saved];
     let name = raw.to_ascii_lowercase();
-    result.insert(
+    result.insert_if_absent(
       name,
       decode_html_attribute_entities(&attr_str[value_start..]).into_owned(),
     );
   } else if state == AFTER_NAME || state == BEFORE_VALUE {
     let raw = &attr_str[name_start_saved..name_end_saved];
     let name = raw.to_ascii_lowercase();
-    result.insert(name, String::new());
+    result.insert_if_absent(name, String::new());
   }
 
   result
@@ -379,5 +424,30 @@ mod tests {
     let (complete, _, _, self_closing) = process_tag_attributes(" href=/u =x/>", 0, false);
     assert!(complete);
     assert!(self_closing);
+  }
+
+  #[test]
+  fn duplicate_attributes_keep_the_first_value() {
+    let attrs = parse_attributes(
+      "href=/first HREF=/second src=one SRC=two class=a CLASS=b id=one ID=two lang=js LANG=python __proto__=first __PROTO__=second Ä=upper ä=lower",
+    );
+    assert_eq!(attrs.get("href").map(String::as_str), Some("/first"));
+    assert_eq!(attrs.get("src").map(String::as_str), Some("one"));
+    assert_eq!(attrs.get("class").map(String::as_str), Some("a"));
+    assert_eq!(attrs.get("id").map(String::as_str), Some("one"));
+    assert_eq!(attrs.get("lang").map(String::as_str), Some("js"));
+    assert_eq!(attrs.get("__proto__").map(String::as_str), Some("first"));
+    assert_eq!(attrs.get("Ä").map(String::as_str), Some("upper"));
+    assert_eq!(attrs.get("ä").map(String::as_str), Some("lower"));
+  }
+
+  #[test]
+  fn malformed_comments_follow_html_end_states() {
+    for html in ["<!-->", "<!--->", "<!--x-->", "<!--x--!>", "<!--x--->"] {
+      let result = process_comment_or_doctype(html, 0);
+      assert!(result.complete, "{html}");
+      assert_eq!(result.new_position, html.len(), "{html}");
+    }
+    assert!(!process_comment_or_doctype("<!--x", 0).complete);
   }
 }

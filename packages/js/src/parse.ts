@@ -488,6 +488,13 @@ export function finalizeParse(
       || (state.currentNode?.tagHandler?.isNonNesting
         && !isSupportedSvgIntegrationPoint(state.currentNode))
       || textModeForNode(state.currentNode) !== TEXT_MODE_DATA
+      || leftover === '<'
+      || leftover === '</'
+      || (leftover.length > 1
+        && !isAsciiAlpha(leftover.charCodeAt(1))
+        && leftover.charCodeAt(1) !== EXCLAMATION_CHAR
+        && leftover.charCodeAt(1) !== SLASH_CHAR
+        && leftover.charCodeAt(1) !== 63)
       || (isSupportedSvgIntegrationPoint(state.currentNode) && leftover === '<'))) {
     if (leftover.charCodeAt(0) === LT_CHAR) {
       state.textBufferContainsNonWhitespace = true
@@ -629,6 +636,11 @@ function isWhitespace(charCode: number): boolean {
     || charCode === NEWLINE_CHAR
     || charCode === FORM_FEED_CHAR
     || charCode === CARRIAGE_RETURN_CHAR
+}
+
+function isAsciiAlpha(charCode: number): boolean {
+  const folded = charCode | 32
+  return folded >= 97 && folded <= 122
 }
 
 function scriptSequenceEnd(html: string, nameStart: number): number {
@@ -781,9 +793,13 @@ function normalizeTagName(tagName: string): keyof typeof TagIdMap {
   for (let i = 0; i < tagName.length; i++) {
     const code = tagName.charCodeAt(i)
     if (code >= 65 && code <= 90)
-      return tagName.toLowerCase() as keyof typeof TagIdMap
+      return asciiLowercase(tagName) as keyof typeof TagIdMap
   }
   return tagName as keyof typeof TagIdMap
+}
+
+function asciiLowercase(value: string): string {
+  return value.replace(/[A-Z]/g, char => String.fromCharCode(char.charCodeAt(0) + 32))
 }
 
 function effectiveTagId(tagName: string, fallbackTagId: number, state: ParseState): number {
@@ -1023,8 +1039,58 @@ function parseHtmlInternal(
         break
       }
     }
+    else if (nextCharCode === 63) { // ?
+      if (textBuffer.length > 0) {
+        processTextBuffer(textBuffer, state, handleEvent)
+        textBuffer = ''
+        runStart = i
+      }
+      const result = processBogusComment(htmlChunk, i)
+      if (result.complete) {
+        i = result.newPosition
+        runStart = i
+      }
+      else {
+        textBuffer += result.remainingText
+        break
+      }
+    }
     // CLOSING TAG
     else if (nextCharCode === SLASH_CHAR) {
+      if (i + 2 >= chunkLength) {
+        if (textBuffer.length > 0)
+          processTextBuffer(textBuffer, state, handleEvent)
+        textBuffer = htmlChunk.substring(i)
+        runStart = i
+        break
+      }
+      const endTagStart = htmlChunk.charCodeAt(i + 2)
+      if (endTagStart === GT_CHAR) {
+        if (textBuffer.length > 0) {
+          processTextBuffer(textBuffer, state, handleEvent)
+          textBuffer = ''
+        }
+        i += 3
+        runStart = i
+        continue
+      }
+      if (!isAsciiAlpha(endTagStart)) {
+        if (textBuffer.length > 0) {
+          processTextBuffer(textBuffer, state, handleEvent)
+          textBuffer = ''
+          runStart = i
+        }
+        const result = processBogusComment(htmlChunk, i)
+        if (result.complete) {
+          i = result.newPosition
+          runStart = i
+        }
+        else {
+          textBuffer += htmlChunk.substring(i)
+          break
+        }
+        continue
+      }
       if (state.currentNode?.tagHandler?.isNonNesting && !isSupportedSvgIntegrationPoint(state.currentNode)) {
         const textMode = textModeForNode(state.currentNode)
         // Peek at the closing tag name to check if it matches the non-nesting tag
@@ -1062,7 +1128,7 @@ function parseHtmlInternal(
       }
     }
     // OPENING TAG
-    else {
+    else if (isAsciiAlpha(nextCharCode)) {
       let i2 = i + 1
       const tagNameStart = i2
 
@@ -1076,7 +1142,10 @@ function parseHtmlInternal(
         i2++
       }
       if (tagNameEnd === -1) {
-        textBuffer += htmlChunk.substring(i)
+        if (textBuffer.length > 0)
+          processTextBuffer(textBuffer, state, handleEvent)
+        textBuffer = htmlChunk.substring(i)
+        runStart = i
         break
       }
 
@@ -1145,6 +1214,12 @@ function parseHtmlInternal(
         textBuffer += result.remainingText
         break
       }
+    }
+    else {
+      state.textBufferContainsNonWhitespace = true
+      state.lastCharWasWhitespace = false
+      state.justClosedTag = false
+      textBuffer += htmlChunk[i++]
     }
   }
 
@@ -1417,18 +1492,29 @@ function processCommentOrDoctype(htmlChunk: string, position: number): {
     && htmlChunk.charCodeAt(i + 3) === DASH_CHAR) {
     i += 4 // Skip past '<!--'
 
-    // Look for --> sequence
-    while (i < chunkLength - 2) {
-      if (htmlChunk.charCodeAt(i) === DASH_CHAR
-        && htmlChunk.charCodeAt(i + 1) === DASH_CHAR
-        && htmlChunk.charCodeAt(i + 2) === GT_CHAR) {
-        i += 3
-        return {
-          complete: true,
-          newPosition: i,
-          remainingText: '',
-        }
-      }
+    const START = 0
+    const START_DASH = 1
+    const COMMENT = 2
+    const END_DASH = 3
+    const END = 4
+    const END_BANG = 5
+    let state = START
+    while (i < chunkLength) {
+      const c = htmlChunk.charCodeAt(i)
+      if ((state === START || state === START_DASH || state === END || state === END_BANG) && c === GT_CHAR)
+        return { complete: true, newPosition: i + 1, remainingText: '' }
+      if (state === START)
+        state = c === DASH_CHAR ? START_DASH : COMMENT
+      else if (state === START_DASH)
+        state = c === DASH_CHAR ? END : COMMENT
+      else if (state === COMMENT)
+        state = c === DASH_CHAR ? END_DASH : COMMENT
+      else if (state === END_DASH)
+        state = c === DASH_CHAR ? END : COMMENT
+      else if (state === END)
+        state = c === 33 ? END_BANG : c === DASH_CHAR ? END : COMMENT
+      else
+        state = c === DASH_CHAR ? END_DASH : COMMENT
       i++
     }
 
@@ -1438,27 +1524,18 @@ function processCommentOrDoctype(htmlChunk: string, position: number): {
       remainingText: htmlChunk.substring(position),
     }
   }
-  else {
-    i += 2 // Skip past '<!'
+  return processBogusComment(htmlChunk, position)
+}
 
-    while (i < chunkLength) {
-      if (htmlChunk.charCodeAt(i) === GT_CHAR) {
-        i++
-        return {
-          complete: true,
-          newPosition: i,
-          remainingText: '',
-        }
-      }
-      i++
-    }
-
-    return {
-      complete: false,
-      newPosition: i,
-      remainingText: htmlChunk.substring(position, i),
-    }
-  }
+function processBogusComment(htmlChunk: string, position: number): {
+  complete: boolean
+  newPosition: number
+  remainingText: string
+} {
+  const end = htmlChunk.indexOf('>', position + 2)
+  return end === -1
+    ? { complete: false, newPosition: position, remainingText: htmlChunk.substring(position) }
+    : { complete: true, newPosition: end + 1, remainingText: '' }
 }
 
 /**
@@ -1863,6 +1940,14 @@ export function parseAttributes(attrStr: string): Record<string, string> {
   let valueStart = 0
   let quoteChar = 0
   let name = ''
+  const setAttribute = (key: string, value: string) => {
+    if (Object.hasOwn(result, key))
+      return
+    if (key === '__proto__')
+      Object.defineProperty(result, key, { configurable: true, enumerable: true, value, writable: true })
+    else
+      result[key] = value
+  }
 
   while (i < len) {
     const charCode = attrStr.charCodeAt(i)
@@ -1880,7 +1965,7 @@ export function parseAttributes(attrStr: string): Record<string, string> {
       case NAME:
         if (charCode === EQUALS_CHAR || isSpace) {
           nameEnd = i
-          name = attrStr.substring(nameStart, nameEnd).toLowerCase()
+          name = asciiLowercase(attrStr.substring(nameStart, nameEnd))
           state = charCode === EQUALS_CHAR ? BEFORE_VALUE : AFTER_NAME
         }
         break
@@ -1890,7 +1975,7 @@ export function parseAttributes(attrStr: string): Record<string, string> {
           state = BEFORE_VALUE
         }
         else if (!isSpace) {
-          result[name] = ''
+          setAttribute(name, '')
           state = NAME
           nameStart = i
           nameEnd = 0 // Reset nameEnd when starting a new attribute
@@ -1912,7 +1997,7 @@ export function parseAttributes(attrStr: string): Record<string, string> {
       case QUOTED_VALUE:
         if (charCode === quoteChar) {
           const raw = attrStr.substring(valueStart, i)
-          result[name] = raw.includes('&') ? decodeHTMLEntities(raw, true) : raw
+          setAttribute(name, raw.includes('&') ? decodeHTMLEntities(raw, true) : raw)
           state = WHITESPACE
         }
         break
@@ -1920,7 +2005,7 @@ export function parseAttributes(attrStr: string): Record<string, string> {
       case UNQUOTED_VALUE:
         if (isSpace || charCode === GT_CHAR) {
           const raw = attrStr.substring(valueStart, i)
-          result[name] = raw.includes('&') ? decodeHTMLEntities(raw, true) : raw
+          setAttribute(name, raw.includes('&') ? decodeHTMLEntities(raw, true) : raw)
           state = WHITESPACE
         }
         break
@@ -1933,14 +2018,14 @@ export function parseAttributes(attrStr: string): Record<string, string> {
   if (state === QUOTED_VALUE || state === UNQUOTED_VALUE) {
     if (name) {
       const raw = attrStr.substring(valueStart, i)
-      result[name] = raw.includes('&') ? decodeHTMLEntities(raw, true) : raw
+      setAttribute(name, raw.includes('&') ? decodeHTMLEntities(raw, true) : raw)
     }
   }
   else if (state === NAME || state === AFTER_NAME || state === BEFORE_VALUE) {
     nameEnd = nameEnd || i
-    const currentName = attrStr.substring(nameStart, nameEnd).toLowerCase()
+    const currentName = asciiLowercase(attrStr.substring(nameStart, nameEnd))
     if (currentName) {
-      result[currentName] = ''
+      setAttribute(currentName, '')
     }
   }
 

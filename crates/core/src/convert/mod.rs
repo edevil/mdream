@@ -2,7 +2,9 @@ use crate::consts::*;
 use crate::entities::{
   decode_html_entities, decode_html_entities_for_markdown, is_entity_reference_after_ampersand,
 };
-use crate::scan::{is_whitespace, process_comment_or_doctype, process_tag_attributes};
+use crate::scan::{
+  is_whitespace, process_bogus_comment, process_comment_or_doctype, process_tag_attributes,
+};
 use crate::selector::{matches_selector, parse_css_selector};
 use crate::tags::get_tag_handler;
 use crate::tailwind::process_tailwind_classes;
@@ -1544,7 +1546,56 @@ impl ConvertState {
           carry = true;
           break;
         }
+      } else if next == b'?' {
+        if !text_buffer.is_empty() {
+          self.process_text_buffer(&mut text_buffer);
+          text_buffer.clear();
+          run_start = i;
+        }
+        let result = process_bogus_comment(chunk, i);
+        if result.complete {
+          i = result.new_position;
+          run_start = i;
+        } else {
+          carry = true;
+          break;
+        }
       } else if next == SLASH_CHAR {
+        if i + 2 >= chunk_length {
+          if !text_buffer.is_empty() {
+            self.process_text_buffer(&mut text_buffer);
+            text_buffer.clear();
+            run_start = i;
+          }
+          carry = true;
+          break;
+        }
+        let end_tag_start = bytes[i + 2];
+        if end_tag_start == GT_CHAR {
+          if !text_buffer.is_empty() {
+            self.process_text_buffer(&mut text_buffer);
+            text_buffer.clear();
+          }
+          i += 3;
+          run_start = i;
+          continue;
+        }
+        if !end_tag_start.is_ascii_alphabetic() {
+          if !text_buffer.is_empty() {
+            self.process_text_buffer(&mut text_buffer);
+            text_buffer.clear();
+            run_start = i;
+          }
+          let result = process_bogus_comment(chunk, i);
+          if result.complete {
+            i = result.new_position;
+            run_start = i;
+          } else {
+            carry = true;
+            break;
+          }
+          continue;
+        }
         if !text_buffer.is_empty() {
           self.process_text_buffer(&mut text_buffer);
           text_buffer.clear();
@@ -1557,7 +1608,7 @@ impl ConvertState {
           carry = true;
           break;
         }
-      } else {
+      } else if next.is_ascii_alphabetic() {
         let mut i2 = i + 1;
         let tag_name_start = i2;
         let mut tag_name_end = None;
@@ -1570,6 +1621,11 @@ impl ConvertState {
           i2 += 1;
         }
         let Some(tag_name_end) = tag_name_end else {
+          if !text_buffer.is_empty() {
+            self.process_text_buffer(&mut text_buffer);
+            text_buffer.clear();
+            run_start = i;
+          }
           carry = true;
           break;
         };
@@ -1650,6 +1706,15 @@ impl ConvertState {
           carry = true;
           break;
         }
+      } else {
+        if !self.push_parse_char(&mut text_buffer, '<') {
+          break;
+        }
+        self.text_buffer_contains_non_whitespace = true;
+        self.text_buffer_has_inline_gfm_hazard = true;
+        self.last_char_was_whitespace = false;
+        self.just_closed_tag = false;
+        i += 1;
       }
     }
 
@@ -1775,6 +1840,10 @@ impl ConvertState {
       && (leftover.as_bytes()[0] != LT_CHAR
         || self.in_non_nesting
         || self.text_mode() != TextMode::Data
+        || matches!(leftover, "<" | "</")
+        || leftover.as_bytes().get(1).is_some_and(|next| {
+          !next.is_ascii_alphabetic() && !matches!(*next, EXCLAMATION_CHAR | SLASH_CHAR | b'?')
+        })
         || (self.is_supported_svg_integration_point() && leftover == "<"))
     {
       if leftover.as_bytes()[0] == LT_CHAR {
