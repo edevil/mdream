@@ -1,0 +1,49 @@
+crates/core/src/convert/mod.rs
+  s_6452cdb8b6939f::t_fe46b297f15817 13,216-227,441,453,459-460,599-614,638,690,859-863,885-892,919,1318-1322,1334,1338-1359,1362-1373,1428-1432,1496-1512,1525-1541,1548-1552,1563-1566,1709-1713,1940-1943,1952-1953,1955,2282-2295
+crates/core/src/convert/parse.rs
+  s_6452cdb8b6939f::t_747037f21d65e3 5-6,237-364,633-644,770,1490-1500
+crates/core/tests/depth_limit.rs
+  s_267414b4cf5871::t_7213af04db90f7 7-24,26-34,38-51,54,59,61,66-67,71-72,77-83,87,89-91,93-106,108-111,115,117,120-128,143-180
+packages/js/src/const.ts
+  s_128f9b89fa8ad8::t_ee4d9706202fd6 252
+packages/js/src/markdown-processor.ts
+  s_128f9b89fa8ad8::t_9ed83b9ba8b56c 72,276,339,434,470,650,1396
+packages/js/src/parse.ts
+  s_6452cdb8b6939f::t_fda82724235213 21,184-185,479,487-488,490,535,560,564,583-594,596-597,600-601,645-735,931,971,988-1002,1005-1010,1014-1016,1074-1076,1078,1087-1098,1101-1104,1260-1262,1706-1711,1784-1795,1904
+packages/js/src/types.ts
+  s_128f9b89fa8ad8::t_0d2459b8f14e87 168-169,229-230
+packages/js/test/unit/depth-limit.test.ts
+  s_6452cdb8b6939f::t_3b1f1e84a9850e 2,4,8-11,27-38,41-44,47-51,55-71,74-79,82-87,90-92,98-121
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "ee9eb2fda2d1b19360cfdad1daf352f50c274620",
+  "prompts": {},
+  "sessions": {
+    "s_128f9b89fa8ad8": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_0659e139affe8wbKn0WHXGrTXt",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "André Cruz <acruz@cloudflare.com>"
+    },
+    "s_267414b4cf5871": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_0659e1454ffeoKUFb9McR4j5CO",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "André Cruz <acruz@cloudflare.com>"
+    },
+    "s_6452cdb8b6939f": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_0659e1424ffe1WiFw1lWamGTyj",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "André Cruz <acruz@cloudflare.com>"
+    }
+  }
+}
