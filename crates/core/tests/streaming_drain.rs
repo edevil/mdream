@@ -2,7 +2,9 @@
 #![allow(unsafe_code)]
 
 use std::alloc::{GlobalAlloc, Layout, System};
+use std::hint::black_box;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::time::{Duration, Instant};
 
 use mdream::MarkdownStreamProcessor;
 use mdream::html_to_markdown;
@@ -378,6 +380,68 @@ fn streaming_wrap_preserves_the_full_current_column() {
   actual.push_str(&processor.finish());
 
   assert_eq!(actual, expected);
+}
+
+#[test]
+fn streaming_wrap_preserves_a_large_unbroken_token() {
+  let token = "x".repeat(256 * 1024);
+  let html = format!("<p>{token} tail words after token</p>");
+  let options = HTMLToMarkdownOptions::default().with_wrap_width(40);
+  let expected = html_to_markdown(&html, options.clone());
+
+  assert!(expected.starts_with(&token));
+  for chunk in [7usize, 127, 8192] {
+    assert_eq!(stream_chunks(&html, chunk, options.clone()), expected);
+  }
+}
+
+fn inline_link_line(repetitions: usize) -> String {
+  let mut html = String::with_capacity(repetitions * 36 + 7);
+  html.push_str("<p>");
+  for _ in 0..repetitions {
+    html.push_str("<span>x</span><a href=\"/x\">y</a>");
+  }
+  html.push_str("</p>");
+  html
+}
+
+#[test]
+fn streaming_wrap_many_inline_runs_matches_after_draining() {
+  let html = inline_link_line(2_000);
+  let options = HTMLToMarkdownOptions::default().with_wrap_width(40);
+  let expected = html_to_markdown(&html, options.clone());
+
+  assert!(!expected.contains('\n'));
+  for chunk in [31usize, 127, 4096] {
+    assert_eq!(stream_chunks(&html, chunk, options.clone()), expected);
+  }
+}
+
+fn best_wrapped_inline_time(repetitions: usize) -> Duration {
+  let html = inline_link_line(repetitions);
+  let options = HTMLToMarkdownOptions::default().with_wrap_width(40);
+  black_box(html_to_markdown(&html, options.clone()));
+
+  (0..3)
+    .map(|_| {
+      let start = Instant::now();
+      black_box(html_to_markdown(black_box(&html), options.clone()));
+      start.elapsed()
+    })
+    .min()
+    .unwrap()
+}
+
+#[test]
+#[ignore = "release-mode scaling probe"]
+fn wrapped_inline_runs_scale_near_linearly() {
+  assert!(!cfg!(debug_assertions), "run this probe with --release");
+  let n = best_wrapped_inline_time(20_000);
+  let two_n = best_wrapped_inline_time(40_000);
+  let ratio = two_n.as_secs_f64() / n.as_secs_f64();
+  eprintln!("wrapped inline scaling: N={n:?}, 2N={two_n:?}, ratio={ratio:.2}");
+
+  assert!(ratio < 3.25, "N={n:?}, 2N={two_n:?}, ratio={ratio:.2}");
 }
 
 #[test]

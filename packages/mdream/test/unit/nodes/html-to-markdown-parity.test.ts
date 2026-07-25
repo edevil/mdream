@@ -42,6 +42,10 @@ const recentMergeCases: ParityCase[] = [
   { html: `<p data-value='a > b < c'>single quoted attribute</p>` },
   { html: '<p>&copy;cat &#65copy; &#x41zz; &bogus;</p>' },
   { html: '<p>--- not a rule</p><p>123456789. item</p>' },
+  {
+    html: '<p>alpha <span>beta</span> <a href="/x">gamma</a> delta epsilon</p>',
+    options: { wrapWidth: 12 },
+  },
 ]
 
 async function streamConvert(engine: TestEngine, { html, options }: ParityCase, chunkSize: number): Promise<string> {

@@ -351,15 +351,10 @@ impl ConvertState {
       }
     }
 
-    let Some(required_len) = frame.content_start.checked_add(quoted.len()) else {
-      self.fail_streaming(StreamingError::CapacityOverflow);
-      return;
-    };
-    if !self.reserve_output_to(required_len) {
+    let buffer_len = self.buffer.len();
+    if !self.replace_output_range(frame.content_start, buffer_len, &quoted) {
       return;
     }
-    self.buffer.truncate(frame.content_start);
-    self.buffer.push_str(&quoted);
     self.last_content_start = Some(frame.content_start);
   }
 
@@ -627,7 +622,7 @@ impl ConvertState {
       && output.as_deref().is_some_and(|value| value.ends_with('\n'))
     {
       let trimmed_len = self.buffer.trim_end_matches(' ').len();
-      self.buffer.truncate(trimmed_len);
+      self.truncate_output(trimmed_len);
       if output.as_deref() == Some("\n") && self.buffer.ends_with("\n\n") {
         output = None;
       }
@@ -646,7 +641,7 @@ impl ConvertState {
 
     if !self.plain_text && !enter_is_literal && tag_id == Some(TAG_BLOCKQUOTE) {
       if !self.blockquotes.is_empty() && self.buffer.ends_with("\n\n") {
-        self.buffer.pop();
+        self.truncate_output(self.buffer.len() - 1);
       }
       if !self.reserve_blockquote() {
         return;
@@ -883,7 +878,7 @@ impl ConvertState {
 
       // emptyLinkText: [](url) → drop entirely
       if self.clean_flags & CLEAN_EMPTY_LINK_TEXT != 0 && link_text.trim().is_empty() {
-        self.buffer.truncate(bracket_pos);
+        self.truncate_output(bracket_pos);
         self.last_node_is_inline = is_inline;
         return;
       }
@@ -896,19 +891,8 @@ impl ConvertState {
           && href.starts_with('#')
           && text_len > 0
         {
-          // Remove [ and keep text only — use truncate+copy without intermediate String
-          let new_len = bracket_pos + text_len;
-          // SAFETY: bracket_pos < text_start are within buffer bounds (guarded above).
-          // We copy link text backwards over "[", then truncate. Preserves valid UTF-8.
-          #[allow(unsafe_code)]
-          unsafe {
-            let buf = self.buffer.as_mut_vec();
-            std::ptr::copy(
-              buf.as_ptr().add(text_start),
-              buf.as_mut_ptr().add(bracket_pos),
-              text_len,
-            );
-            buf.set_len(new_len);
+          if !self.replace_output_range(bracket_pos, text_start, "") {
+            return;
           }
           self.last_content_start = Some(bracket_pos);
           self.last_node_is_inline = is_inline;
@@ -926,18 +910,8 @@ impl ConvertState {
           self.options.clean_urls,
         );
         if link_text == resolved.as_ref() && text_len > 0 {
-          // Remove [ and keep text only — use truncate+copy without intermediate String
-          let new_len = bracket_pos + text_len;
-          // SAFETY: same invariants as self-link heading case. Preserves valid UTF-8.
-          #[allow(unsafe_code)]
-          unsafe {
-            let buf = self.buffer.as_mut_vec();
-            std::ptr::copy(
-              buf.as_ptr().add(text_start),
-              buf.as_mut_ptr().add(bracket_pos),
-              text_len,
-            );
-            buf.set_len(new_len);
+          if !self.replace_output_range(bracket_pos, text_start, "") {
+            return;
           }
           self.last_content_start = Some(bracket_pos);
           self.last_node_is_inline = is_inline;
@@ -1007,10 +981,13 @@ impl ConvertState {
             if !self.reserve_output_to(required_len) {
               return;
             }
-            self.buffer.truncate(bp);
-            self.buffer.push('<');
-            self.buffer.push_str(&resolved);
-            self.buffer.push('>');
+            self.truncate_output(bp);
+            if !self.push_output_char('<')
+              || !self.push_output_str(&resolved)
+              || !self.push_output_char('>')
+            {
+              return;
+            }
             self.last_content_start = Some(bp);
             self.last_node_is_inline = is_inline;
             return;
@@ -1061,7 +1038,7 @@ impl ConvertState {
         // `output_start` includes a separator owned by the opener (inline
         // code in a list can emit " `"), but excludes normal surrounding
         // spacing synthesized by write_output.
-        self.buffer.truncate(output_start);
+        self.truncate_output(output_start);
         self.last_content_start = None;
         self.last_node_is_inline = is_inline;
         return;
@@ -1379,8 +1356,9 @@ impl ConvertState {
         return;
       }
       let content_start = self.buffer.len();
-      self.buffer.push(' ');
-      self.buffer.push_str(text);
+      if !self.push_output_char(' ') || !self.push_output_str(text) {
+        return;
+      }
       self.last_content_start = Some(content_start);
     } else {
       let content_start = if continues_previous_text {
@@ -1683,22 +1661,10 @@ impl ConvertState {
       || self.depth_map[TAG_DD as usize] > 0
   }
 
-  /// Character count of the current (unterminated) buffer line, i.e. since the
-  /// last `\n`. This is the live output column, including any block prefix
-  /// (`> `, list indent) already written for the line.
+  /// Character count of the current output line, including drained bytes.
   #[inline]
   fn current_column(&self) -> usize {
-    let bytes = self.buffer.as_bytes();
-    let mut i = bytes.len();
-    while i > 0 && bytes[i - 1] != b'\n' {
-      i -= 1;
-    }
-    let buffered_column = self.buffer[i..].chars().count();
-    if i == 0 {
-      self.buffer_start_column.saturating_add(buffered_column)
-    } else {
-      buffered_column
-    }
+    self.output_column
   }
 
   /// Continuation prefix re-emitted at the start of each continued line so the
@@ -2416,7 +2382,7 @@ impl ConvertState {
 
       if last_char == b' ' && !self.buffer.is_empty() {
         let trimmed_len = self.buffer.trim_end_matches(' ').len();
-        self.buffer.truncate(trimmed_len);
+        self.truncate_output(trimmed_len);
         // This source whitespace was consumed by the block boundary; do not
         // let its state leak into a later inline event and trim that output.
         self.last_text_node_contains_whitespace = false;
@@ -2485,7 +2451,7 @@ impl ConvertState {
               .trim_end_matches(|c: char| c.is_ascii_whitespace())
               .len();
             if trimmed_len < frag.len() {
-              self.buffer.truncate(start + trimmed_len);
+              self.truncate_output(start + trimmed_len);
               if !is_enter && is_inline {
                 self.pending_inline_whitespace = true;
               }

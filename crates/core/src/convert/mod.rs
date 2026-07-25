@@ -622,15 +622,16 @@ pub struct ConvertState {
   /// later rewrite trims the retained buffer empty, spacing and newline counts
   /// still need the same two-byte context one-shot conversion sees.
   flushed_tail: [u8; 2],
-  /// Output column immediately before `buffer[0]`. Draining may remove the
-  /// beginning of the current line, but wrapping still needs its full column.
+  /// Rendered column immediately before the retained output buffer when wrapping.
   buffer_start_column: usize,
+  /// Rendered column at the end of `buffer` when wrapping.
+  output_column: usize,
   /// Test-only: disables draining to prove it never alters streamed bytes.
   #[cfg(test)]
   pub(crate) disable_drain: bool,
 
-  /// Hard-wrap width in characters; 0 disables wrapping (zero-cost in the text
-  /// hot path — a single integer compare). Code/tables/headings are exempt.
+  /// Hard-wrap width in characters; 0 disables wrapping. Code, tables, and
+  /// headings are exempt.
   wrap_width: usize,
   plain_text: bool,
   preserve_leading_whitespace: bool,
@@ -865,6 +866,7 @@ impl ConvertState {
       has_streamed_output: false,
       flushed_tail: [0; 2],
       buffer_start_column: 0,
+      output_column: 0,
       #[cfg(test)]
       disable_drain: false,
 
@@ -1271,6 +1273,8 @@ impl ConvertState {
     self.frontmatter_meta = Vec::new();
     self.extraction_tracked = Vec::new();
     self.extraction_results = Vec::new();
+    self.buffer_start_column = 0;
+    self.output_column = 0;
   }
 
   fn reserve_tokenizer_context(&mut self) -> bool {
@@ -1420,6 +1424,13 @@ impl ConvertState {
       return false;
     }
     self.buffer.push_str(value);
+    if self.wrap_width != 0 {
+      if let Some(last_newline) = value.rfind('\n') {
+        self.output_column = value[last_newline + 1..].chars().count();
+      } else {
+        self.output_column = self.output_column.saturating_add(value.chars().count());
+      }
+    }
     true
   }
 
@@ -1428,7 +1439,32 @@ impl ConvertState {
       return false;
     }
     self.buffer.push(value);
+    if self.wrap_width != 0 {
+      if value == '\n' {
+        self.output_column = 0;
+      } else {
+        self.output_column = self.output_column.saturating_add(1);
+      }
+    }
     true
+  }
+
+  fn column_at(&self, offset: usize) -> usize {
+    let prefix = &self.buffer[..offset];
+    prefix.rfind('\n').map_or_else(
+      || {
+        self
+          .buffer_start_column
+          .saturating_add(prefix.chars().count())
+      },
+      |newline| prefix[newline + 1..].chars().count(),
+    )
+  }
+
+  fn advance_buffer_start_column(&mut self, drain_end: usize) {
+    if self.wrap_width != 0 {
+      self.buffer_start_column = self.column_at(drain_end);
+    }
   }
 
   pub(crate) fn reserve_list_indent(&mut self, additional: usize) -> bool {
@@ -1568,22 +1604,13 @@ impl ConvertState {
         drain_end -= 1;
       }
       if drain_end > 0 {
-        if self.wrap_width != 0 {
-          let drained = &self.buffer[..drain_end];
-          self.buffer_start_column = if let Some(last_newline) = drained.rfind('\n') {
-            drained[last_newline + 1..].chars().count()
-          } else {
-            self
-              .buffer_start_column
-              .saturating_add(drained.chars().count())
-          };
-        }
         let bytes = self.buffer.as_bytes();
         self.flushed_tail = if drain_end >= 2 {
           [bytes[drain_end - 2], bytes[drain_end - 1]]
         } else {
           [self.flushed_tail[1], bytes[0]]
         };
+        self.advance_buffer_start_column(drain_end);
         self.buffer.drain(..drain_end);
         self.last_yielded_length -= drain_end;
         self.link_bracket_pos = self.link_bracket_pos.saturating_sub(drain_end);
@@ -1620,8 +1647,47 @@ impl ConvertState {
     if !self.reserve_output_to(required_len) {
       return false;
     }
+    if self.wrap_width != 0 {
+      let suffix = &self.buffer[end..];
+      self.output_column = if suffix.contains('\n') {
+        self.output_column
+      } else if let Some(last_newline) = replacement.rfind('\n') {
+        replacement[last_newline + 1..]
+          .chars()
+          .count()
+          .saturating_add(suffix.chars().count())
+      } else {
+        let removed = &self.buffer[start..end];
+        if removed.contains('\n') {
+          self
+            .column_at(start)
+            .saturating_add(replacement.chars().count())
+            .saturating_add(suffix.chars().count())
+        } else {
+          self
+            .output_column
+            .saturating_sub(removed.chars().count())
+            .saturating_add(replacement.chars().count())
+        }
+      };
+    }
     self.buffer.replace_range(start..end, replacement);
     true
+  }
+
+  pub(crate) fn truncate_output(&mut self, new_len: usize) {
+    if new_len >= self.buffer.len() {
+      return;
+    }
+    if self.wrap_width != 0 {
+      let removed = &self.buffer[new_len..];
+      self.output_column = if removed.contains('\n') {
+        self.column_at(new_len)
+      } else {
+        self.output_column.saturating_sub(removed.chars().count())
+      };
+    }
+    self.buffer.truncate(new_len);
   }
 
   pub(crate) fn retained_string_copy(
@@ -2633,22 +2699,13 @@ impl ConvertState {
     if drain_end == 0 {
       return;
     }
-    if self.wrap_width != 0 {
-      let drained = &self.buffer[..drain_end];
-      self.buffer_start_column = if let Some(last_newline) = drained.rfind('\n') {
-        drained[last_newline + 1..].chars().count()
-      } else {
-        self
-          .buffer_start_column
-          .saturating_add(drained.chars().count())
-      };
-    }
     let bytes = self.buffer.as_bytes();
     self.flushed_tail = if drain_end >= 2 {
       [bytes[drain_end - 2], bytes[drain_end - 1]]
     } else {
       [self.flushed_tail[1], bytes[0]]
     };
+    self.advance_buffer_start_column(drain_end);
     self.buffer.drain(..drain_end);
     self.last_yielded_length -= drain_end;
     self.link_bracket_pos = self.link_bracket_pos.saturating_sub(drain_end);
@@ -2776,5 +2833,25 @@ mod bounded_buffer_tests {
       state.overflow.as_ref().map(|overflow| overflow.root_depth),
       Some(100_000 - 512)
     );
+  }
+
+  #[test]
+  fn rewrites_restore_columns_before_a_drained_newline() {
+    let mut state = ConvertState::new(
+      HTMLToMarkdownOptions::default().with_wrap_width(40),
+      64,
+      OutputFormat::Markdown,
+    );
+    assert!(state.push_output_str("abcdefghij"));
+    state.advance_buffer_start_column(10);
+    state.buffer.drain(..10);
+
+    assert!(state.push_output_str("abc\ndef"));
+    state.truncate_output(3);
+    assert_eq!(state.output_column, 13);
+
+    assert!(state.push_output_str("\nghi"));
+    assert!(state.replace_output_range(3, 4, ""));
+    assert_eq!(state.output_column, 16);
   }
 }
