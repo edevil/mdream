@@ -4,6 +4,7 @@
 //! relative-URL resolution, GFM autolink detection, and heading slugs.
 
 use std::borrow::Cow;
+use url::Url;
 
 /// Known tracking query parameter prefixes to strip when clean_urls is enabled.
 const TRACKING_PREFIXES: [&str; 6] = ["utm_", "fbclid", "gclid", "mc_eid", "msclkid", "oly_"];
@@ -175,68 +176,18 @@ pub(crate) fn resolve_url<'a>(url: &'a str, origin: Option<&str>, clean: bool) -
     return Cow::Borrowed(url);
   }
 
-  // Fast path: check if cleaning needed before any allocation
-  let needs_clean = clean && url.as_bytes().contains(&b'?');
-  if url.starts_with("//") {
-    let mut resolved = String::with_capacity(6 + url.len());
-    resolved.push_str("https:");
-    resolved.push_str(url);
-    return Cow::Owned(if needs_clean {
-      strip_tracking_params_owned(resolved)
-    } else {
-      resolved
-    });
-  }
-  if let Some(orig) = origin {
-    let orig = orig.trim_end_matches('/');
-    if url.starts_with('/') {
-      let mut resolved = String::with_capacity(orig.len() + url.len());
-      resolved.push_str(orig);
-      resolved.push_str(url);
-      return Cow::Owned(if needs_clean {
-        strip_tracking_params_owned(resolved)
-      } else {
-        resolved
-      });
+  let resolved: Option<String> = origin
+    .and_then(|origin| Url::parse(origin).ok())
+    .and_then(|origin| origin.join(url).ok())
+    .map(Into::into);
+
+  match resolved {
+    Some(resolved) if clean && resolved.as_bytes().contains(&b'?') => {
+      Cow::Owned(strip_tracking_params_owned(resolved))
     }
-    if let Some(suffix) = url.strip_prefix("./") {
-      let mut resolved = String::with_capacity(orig.len() + 1 + suffix.len());
-      resolved.push_str(orig);
-      resolved.push('/');
-      resolved.push_str(suffix);
-      return Cow::Owned(if needs_clean {
-        strip_tracking_params_owned(resolved)
-      } else {
-        resolved
-      });
-    }
-    // A url with an explicit scheme (`mailto:`, `ftp:`, `https:`, …) is
-    // absolute — only scheme-less urls are joined against the origin.
-    // Checked here rather than up-front so the common relative/`/`-prefixed
-    // paths never pay for the scan.
-    let has_scheme = url.find(':').is_some_and(|ci| {
-      ci > 0
-        && url[..ci]
-          .bytes()
-          .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'+' | b'-' | b'.'))
-    });
-    if !has_scheme {
-      let suffix = url.strip_prefix('/').unwrap_or(url);
-      let mut resolved = String::with_capacity(orig.len() + 1 + suffix.len());
-      resolved.push_str(orig);
-      resolved.push('/');
-      resolved.push_str(suffix);
-      return Cow::Owned(if needs_clean {
-        strip_tracking_params_owned(resolved)
-      } else {
-        resolved
-      });
-    }
-  }
-  if needs_clean {
-    strip_tracking_params(url)
-  } else {
-    Cow::Borrowed(url)
+    Some(resolved) => Cow::Owned(resolved),
+    None if clean && url.as_bytes().contains(&b'?') => strip_tracking_params(url),
+    None => Cow::Borrowed(url),
   }
 }
 
@@ -306,7 +257,7 @@ mod tests {
 
   #[test]
   fn resolve_url_passthrough() {
-    // empty and fragment-only are borrowed unchanged
+    // Empty and unresolved references are borrowed unchanged.
     assert_eq!(resolve_url("", None, false), "");
     assert_eq!(
       resolve_url("#anchor", Some("https://x.com"), true),
@@ -322,8 +273,16 @@ mod tests {
   #[test]
   fn resolve_url_protocol_relative() {
     assert_eq!(
-      resolve_url("//cdn.x.com/a.js", None, false),
+      resolve_url("//cdn.x.com/a.js", Some("https://x.com"), false),
       "https://cdn.x.com/a.js"
+    );
+    assert_eq!(
+      resolve_url("//cdn.x.com/a.js", Some("http://x.com"), false),
+      "http://cdn.x.com/a.js"
+    );
+    assert_eq!(
+      resolve_url("//cdn.x.com/a.js", None, false),
+      "//cdn.x.com/a.js"
     );
   }
 
@@ -343,6 +302,36 @@ mod tests {
     assert_eq!(
       resolve_url("page", Some("https://x.com"), false),
       "https://x.com/page",
+    );
+    assert_eq!(
+      resolve_url("../asset", Some("https://x.com/docs/guide/"), false),
+      "https://x.com/docs/asset",
+    );
+    assert_eq!(
+      resolve_url("./asset", Some("https://x.com/docs/page"), false),
+      "https://x.com/docs/asset",
+    );
+  }
+
+  #[test]
+  fn resolve_url_reference_forms() {
+    let origin = Some("https://user:pass@x.com:8443/docs/page?old=1#old");
+    assert_eq!(
+      resolve_url("/root", origin, false),
+      "https://user:pass@x.com:8443/root"
+    );
+    assert_eq!(
+      resolve_url("?new=1", origin, false),
+      "https://user:pass@x.com:8443/docs/page?new=1"
+    );
+    assert_eq!(resolve_url("#new", origin, false), "#new");
+    assert_eq!(
+      resolve_url("https://other.test/a/../b", origin, false),
+      "https://other.test/b"
+    );
+    assert_eq!(
+      resolve_url("mailto:a@b.com", origin, false),
+      "mailto:a@b.com"
     );
   }
 
@@ -394,8 +383,7 @@ mod tests {
   }
 
   #[test]
-  fn relative_join_no_double_slash() {
-    // trailing slash on origin must not produce `//`
+  fn base_path_follows_url_resolution_semantics() {
     assert_eq!(
       resolve_url("./sub", Some("https://x.com/"), false),
       "https://x.com/sub"
@@ -405,7 +393,11 @@ mod tests {
       "https://x.com/p"
     );
     assert_eq!(
-      resolve_url("page", Some("https://x.com/"), false),
+      resolve_url("page", Some("https://x.com/docs/"), false),
+      "https://x.com/docs/page"
+    );
+    assert_eq!(
+      resolve_url("page", Some("https://x.com/docs"), false),
       "https://x.com/page"
     );
   }

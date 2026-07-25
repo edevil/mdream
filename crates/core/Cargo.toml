@@ -37,6 +37,9 @@ exclude = [
 [lints]
 workspace = true
 
+[dependencies]
+url = "2.5.4"
+
 [[bin]]
 name = "mdream"
 path = "src/bin.rs"

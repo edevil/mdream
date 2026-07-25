@@ -125,7 +125,6 @@ import {
 import { continuationPrefix, getLanguageFromClass, isEmptyLinkHref, isEntityReferenceAfterAmpersand } from './utils'
 
 const TRACKING_PARAM_RE = /^(?:utm_|fbclid|gclid|mc_eid|msclkid|oly_)/
-const URL_SCHEME_RE = /^[\dA-Z+.-]+:/i
 
 function stripTrackingParams(url: string): string {
   const queryStart = url.indexOf('?')
@@ -146,14 +145,13 @@ export function resolveUrl(url: string, origin?: string, clean?: EngineOptions['
     return url
 
   let resolved = url
-  if (url.startsWith('//')) {
-    resolved = `https:${url}`
-  }
-  else if (origin && !URL_SCHEME_RE.test(url)) {
-    const path = url.startsWith('./') ? url.slice(2) : url
-    while (origin.endsWith('/'))
-      origin = origin.slice(0, -1)
-    resolved = `${origin}${path[0] === '/' ? '' : '/'}${path}`
+  if (origin) {
+    try {
+      resolved = new URL(url, origin).href
+    }
+    catch {
+      // Invalid bases or references retain the source value.
+    }
   }
 
   const cleansUrls = clean === true || (!!clean && clean.urls === true)

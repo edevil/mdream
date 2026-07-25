@@ -445,7 +445,7 @@ fn anchor_link_with_origin_stays_relative() {
 fn protocol_relative_url() {
   assert_eq!(
     convert(r#"<a href="//example.com/page#section">Link</a>"#),
-    "[Link](https://example.com/page#section)"
+    "[Link](//example.com/page#section)"
   );
 }
 
