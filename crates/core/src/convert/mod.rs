@@ -498,7 +498,7 @@ pub struct ConvertState {
   // === Markdown output state ===
   pub options: HTMLToMarkdownOptions,
   pub buffer: String,
-  last_content_cache_len: usize,
+  last_content_start: Option<usize>,
   table_rendered_table: bool,
   table_current_row_cells: usize,
   // 0=none, 1=left, 2=center, 3=right
@@ -733,7 +733,7 @@ impl ConvertState {
       } else {
         String::with_capacity(capacity.max(1024))
       },
-      last_content_cache_len: 0,
+      last_content_start: None,
       table_rendered_table: false,
       table_current_row_cells: 0,
       table_column_alignments: Vec::new(),
@@ -1152,7 +1152,7 @@ impl ConvertState {
         self.buffer.drain(..drain_end);
         self.last_yielded_length -= drain_end;
         self.link_bracket_pos = self.link_bracket_pos.saturating_sub(drain_end);
-        self.last_content_cache_len = 0;
+        self.last_content_start = None;
       }
     }
     let threshold = self.buffer.len().saturating_mul(4).max(256);
@@ -2100,45 +2100,11 @@ impl ConvertState {
     } else {
       buf_len - self.buffer.trim_start().len()
     };
-    // An open inline marker may still be dropped if its element closes empty in a later chunk;
-    // hold the buffer at the earliest such marker so already-yielded output is never rewritten.
-    // The spaces immediately before it belong to the preceding text node: if the marker is
-    // dropped (empty element) and a block boundary then trims that trailing space, a yielded
-    // space would be silently removed and shift every later byte. Hold those spaces back too.
-    if let Some(&(_, p, _)) = self.open_markers.first() {
-      stable_end = stable_end.min(self.buffer[..p].trim_end_matches(['\n', ' ']).len());
-    }
-    if let Some(span) = self.code_spans.first() {
+    // Hold output before every active rewrite owner. Whitespace immediately
+    // before an owner can also be trimmed if that construct becomes empty.
+    if let Some(rewrite_start) = self.earliest_rewrite_start() {
       stable_end = stable_end.min(
-        self.buffer[..span.output_start]
-          .trim_end_matches(['\n', ' '])
-          .len(),
-      );
-    }
-    if let Some(fence) = &self.code_fence {
-      stable_end = stable_end.min(
-        self.buffer[..fence.output_start]
-          .trim_end_matches(['\n', ' '])
-          .len(),
-      );
-    }
-    if let Some(frame) = self.blockquotes.first() {
-      stable_end = stable_end.min(
-        self.buffer[..frame.content_start]
-          .trim_end_matches(['\n', ' '])
-          .len(),
-      );
-    }
-    // An open `<a>`'s close can rewrite the buffer back to `link_bracket_pos`
-    // (emptyLinkText drop, selfLinkHeadings, redundantLinks, GFM autolink). Hold the
-    // yield boundary there so a link that turns out empty never leaks a stray `[`.
-    // As with inline markers, the spaces just before the `[` belong to the
-    // preceding text: an empty-link drop followed by a block close trims them,
-    // so hold them back too or a yielded space would be silently removed.
-    // Mirrors the same guard in `drain_streamed_prefix`.
-    if self.depth_map[TAG_A as usize] > 0 {
-      stable_end = stable_end.min(
-        self.buffer[..self.link_bracket_pos]
+        self.buffer[..rewrite_start]
           .trim_end_matches(['\n', ' '])
           .len(),
       );
@@ -2169,16 +2135,29 @@ impl ConvertState {
     new_content
   }
 
+  fn earliest_rewrite_start(&self) -> Option<usize> {
+    let mut start = (self.depth_map[TAG_A as usize] > 0).then_some(self.link_bracket_pos);
+    for candidate in [
+      self.open_markers.first().map(|marker| marker.1),
+      self.code_spans.first().map(|span| span.output_start),
+      self.code_fence.as_ref().map(|fence| fence.output_start),
+      self.blockquotes.first().map(|frame| frame.content_start),
+    ]
+    .into_iter()
+    .flatten()
+    {
+      start = Some(start.map_or(candidate, |current| current.min(candidate)));
+    }
+    start
+  }
+
   /// Free already-yielded output so streaming memory stays O(window), not
-  /// O(document). Skipped when a whole-document feature (fragment cleaning,
-  /// frontmatter, extraction) still needs the full buffer.
+  /// O(document). Skipped when a whole-document feature still needs the full
+  /// buffer.
   ///
-  /// Must never change the emitted bytes. In-buffer rewrites reach back at most
-  /// to `link_bracket_pos` (open `<a>`) or `buffer.len() - last_content_cache_len`;
-  /// the window below never frees past either, and offsets are rebased on
-  /// removal. Rewrites of already-yielded bytes can't be un-sent by any
-  /// streaming API and diverge from one-shot regardless of drain. The
-  /// `disable_drain` equivalence test guards this without enumerating rewrites.
+  /// Must never change emitted bytes. Every syntax rewrite exposes its exact
+  /// start through `earliest_rewrite_start`; the trailing content start covers
+  /// whitespace cleanup. Both offsets are rebased when a prefix is removed.
   fn drain_streamed_prefix(&mut self) {
     #[cfg(test)]
     if self.disable_drain {
@@ -2194,7 +2173,8 @@ impl ConvertState {
     let mut retained_tail_start = self
       .buffer
       .len()
-      .saturating_sub(self.last_content_cache_len.max(2));
+      .saturating_sub(2)
+      .min(self.last_content_start.unwrap_or(self.buffer.len()));
     while !self.buffer.is_char_boundary(retained_tail_start) {
       retained_tail_start -= 1;
     }
@@ -2212,20 +2192,8 @@ impl ConvertState {
       }
       i
     };
-    if self.depth_map[TAG_A as usize] > 0 {
-      drain_end = drain_end.min(keep_two_before(&self.buffer, self.link_bracket_pos));
-    }
-    if let Some(&(_, output_start, _)) = self.open_markers.first() {
-      drain_end = drain_end.min(keep_two_before(&self.buffer, output_start));
-    }
-    if let Some(span) = self.code_spans.first() {
-      drain_end = drain_end.min(keep_two_before(&self.buffer, span.output_start));
-    }
-    if let Some(fence) = &self.code_fence {
-      drain_end = drain_end.min(keep_two_before(&self.buffer, fence.output_start));
-    }
-    if let Some(frame) = self.blockquotes.first() {
-      drain_end = drain_end.min(keep_two_before(&self.buffer, frame.content_start));
+    if let Some(rewrite_start) = self.earliest_rewrite_start() {
+      drain_end = drain_end.min(keep_two_before(&self.buffer, rewrite_start));
     }
     if drain_end == 0 {
       return;
@@ -2249,6 +2217,9 @@ impl ConvertState {
     self.buffer.drain(..drain_end);
     self.last_yielded_length -= drain_end;
     self.link_bracket_pos = self.link_bracket_pos.saturating_sub(drain_end);
+    self.last_content_start = self
+      .last_content_start
+      .map(|start| start.saturating_sub(drain_end));
     for (_, output_start, content_start) in &mut self.open_markers {
       *output_start -= drain_end;
       *content_start -= drain_end;

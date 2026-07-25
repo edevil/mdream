@@ -172,6 +172,31 @@ fn closed_construct_releases_high_water_capacity() {
 }
 
 #[test]
+fn active_rewrite_window_does_not_pin_prior_output() {
+  const LIMIT: usize = 1024;
+  let mut processor =
+    BoundedMarkdownStreamProcessor::new(HTMLToMarkdownOptions::default(), limits(LIMIT)).unwrap();
+
+  for _ in 0..256 {
+    drop(processor.process_chunk("<p>completed prefix</p>").unwrap());
+    assert!(processor.buffered_capacity() <= LIMIT);
+  }
+
+  drop(processor.process_chunk("<a href=\"/x\">").unwrap());
+  assert_eq!(processor.process_chunk(&"x".repeat(256)).unwrap(), "");
+  assert!(
+    processor.buffered_bytes() < 512,
+    "open link pinned {} bytes of completed output",
+    processor.buffered_bytes()
+  );
+
+  let closed = processor.process_chunk("</a>").unwrap();
+  assert!(closed.ends_with(&format!("[{}](/x)", "x".repeat(256))));
+  assert!(!closed.contains("completed prefix"));
+  assert!(processor.buffered_capacity() < 512);
+}
+
+#[test]
 fn closed_script_releases_parser_scratch_capacity() {
   let mut processor =
     BoundedMarkdownStreamProcessor::new(HTMLToMarkdownOptions::default(), limits(16 * 1024))

@@ -360,7 +360,7 @@ impl ConvertState {
     }
     self.buffer.truncate(frame.content_start);
     self.buffer.push_str(&quoted);
-    self.last_content_cache_len = quoted.len();
+    self.last_content_start = Some(frame.content_start);
   }
 
   pub(crate) fn flush_streaming_blockquote_lines(&mut self) {
@@ -413,7 +413,7 @@ impl ConvertState {
       for frame in &mut self.blockquotes {
         frame.content_start = flush_end;
       }
-      self.last_content_cache_len = self.buffer.len() - flush_end;
+      self.last_content_start = Some(flush_end);
       return;
     }
 
@@ -447,7 +447,7 @@ impl ConvertState {
     for frame in &mut self.blockquotes {
       frame.content_start = flush_end;
     }
-    self.last_content_cache_len = self.buffer.len() - flush_end;
+    self.last_content_start = Some(flush_end);
   }
 
   /// Emit markdown for entering the element currently on top of self.stack.
@@ -896,7 +896,7 @@ impl ConvertState {
             );
             buf.set_len(new_len);
           }
-          self.last_content_cache_len = text_len;
+          self.last_content_start = Some(bracket_pos);
           self.last_node_is_inline = is_inline;
           return;
         }
@@ -925,7 +925,7 @@ impl ConvertState {
             );
             buf.set_len(new_len);
           }
-          self.last_content_cache_len = text_len;
+          self.last_content_start = Some(bracket_pos);
           self.last_node_is_inline = is_inline;
           return;
         }
@@ -957,14 +957,13 @@ impl ConvertState {
           self.options.clean_urls,
         );
         let mut title = node.attributes.get("title").map_or("", String::as_str);
-        if !title.is_empty() && self.last_content_cache_len > 0 {
-          let buf_len = self.buffer.len();
-          let start = buf_len.saturating_sub(self.last_content_cache_len);
-          if self.buffer.is_char_boundary(start) {
-            let cache = &self.buffer[start..];
-            if cache == title {
-              title = "";
-            }
+        if !title.is_empty()
+          && let Some(start) = self.last_content_start
+          && self.buffer.is_char_boundary(start)
+        {
+          let cache = &self.buffer[start..];
+          if cache == title {
+            title = "";
           }
         }
         // GFM autolink shorthand: when href equals text content and is a
@@ -998,7 +997,7 @@ impl ConvertState {
             self.buffer.push('<');
             self.buffer.push_str(&resolved);
             self.buffer.push('>');
-            self.last_content_cache_len = self.buffer.len() - bp;
+            self.last_content_start = Some(bp);
             self.last_node_is_inline = is_inline;
             return;
           }
@@ -1014,7 +1013,7 @@ impl ConvertState {
         if !self.push_output_str(&resource) {
           return;
         }
-        self.last_content_cache_len = self.buffer.len() - self.link_bracket_pos;
+        self.last_content_start = Some(self.link_bracket_pos);
       }
       // Record fragment link position for deferred fixup
       if self.clean_flags & CLEAN_FRAGMENTS != 0
@@ -1049,7 +1048,7 @@ impl ConvertState {
         // code in a list can emit " `"), but excludes normal surrounding
         // spacing synthesized by write_output.
         self.buffer.truncate(output_start);
-        self.last_content_cache_len = 0;
+        self.last_content_start = None;
         self.last_node_is_inline = is_inline;
         return;
       }
@@ -1143,10 +1142,10 @@ impl ConvertState {
       format!("```{}\n", self.pre_fence_lang)
     };
     let output_start = self.buffer.len();
-    self.last_content_cache_len = fence.len();
     if !self.push_output_str(&fence) {
       return;
     }
+    self.last_content_start = Some(output_start);
     let language = self.pre_fence_lang.clone();
     let indent = self.list_indent.clone();
     self.start_code_fence(output_start, self.buffer.len(), &language, &indent);
@@ -1365,18 +1364,20 @@ impl ConvertState {
       if !self.reserve_output(additional) {
         return;
       }
+      let content_start = self.buffer.len();
       self.buffer.push(' ');
-      self.last_content_cache_len = additional;
       self.buffer.push_str(text);
+      self.last_content_start = Some(content_start);
     } else {
-      self.last_content_cache_len = if continues_previous_text {
-        self.last_content_cache_len.saturating_add(text.len())
+      let content_start = if continues_previous_text {
+        self.last_content_start.unwrap_or(self.buffer.len())
       } else {
-        text.len()
+        self.buffer.len()
       };
       if !self.push_output_str(text) {
         return;
       }
+      self.last_content_start = Some(content_start);
     }
 
     if !self.open_markers.is_empty() && text.as_bytes().iter().any(|&b| !is_whitespace(b)) {
@@ -1771,14 +1772,16 @@ impl ConvertState {
     {
       return;
     }
-    self.last_content_cache_len = self.buffer.len() - buf_start;
+    self.last_content_start = Some(buf_start);
   }
 
   /// Emit frontmatter content.
   pub(crate) fn emit_frontmatter(&mut self, content: &str) {
     if !content.is_empty() {
-      self.last_content_cache_len = content.len();
-      let _ = self.push_output_str(content);
+      let content_start = self.buffer.len();
+      if self.push_output_str(content) {
+        self.last_content_start = Some(content_start);
+      }
     }
   }
 
@@ -2387,10 +2390,11 @@ impl ConvertState {
       // which never drains, keeps).
       if self.buffer.is_empty() && !self.has_streamed_output {
         if !output_str.is_empty() {
-          self.last_content_cache_len = output_str.len();
+          let content_start = self.buffer.len();
           if !self.push_output_str(output_str) {
             return;
           }
+          self.last_content_start = Some(content_start);
         }
         self.last_node_is_inline = is_inline;
         return;
@@ -2412,17 +2416,19 @@ impl ConvertState {
           }
         }
         if !output_str.is_empty() {
-          self.last_content_cache_len = output_str.len();
+          let content_start = self.buffer.len();
           if !self.push_output_str(output_str) {
             return;
           }
+          self.last_content_start = Some(content_start);
         }
       } else {
         if !output_str.is_empty() {
-          self.last_content_cache_len = output_str.len();
+          let content_start = self.buffer.len();
           if !self.push_output_str(output_str) {
             return;
           }
+          self.last_content_start = Some(content_start);
         }
         for _ in 0..new_lines {
           if !self.push_output_char('\n') {
@@ -2453,11 +2459,9 @@ impl ConvertState {
         let should_trim = !(is_block || h_is_inline && is_enter || is_enter && collapses)
           && !(has_spacing && is_enter);
 
-        if should_trim && self.last_content_cache_len > 0 {
-          let cache_len = self.last_content_cache_len;
+        if should_trim && let Some(start) = self.last_content_start {
           let buf_len = self.buffer.len();
-          let start = buf_len.saturating_sub(cache_len);
-          if cache_len <= buf_len && self.buffer.is_char_boundary(start) {
+          if start <= buf_len && self.buffer.is_char_boundary(start) {
             let frag = &self.buffer[start..];
             // Trim only ASCII whitespace, not `str::trim_end`'s full Unicode
             // set: a trailing U+00A0 (`&nbsp;`) is meaningful content, and once
@@ -2466,7 +2470,7 @@ impl ConvertState {
             let trimmed_len = frag
               .trim_end_matches(|c: char| c.is_ascii_whitespace())
               .len();
-            if trimmed_len < cache_len {
+            if trimmed_len < frag.len() {
               self.buffer.truncate(start + trimmed_len);
               if !is_enter && is_inline {
                 self.pending_inline_whitespace = true;
@@ -2488,14 +2492,15 @@ impl ConvertState {
         if !self.push_output_char(' ') {
           return;
         }
-        self.last_content_cache_len = 1;
+        self.last_content_start = Some(self.buffer.len() - 1);
       }
 
       if !output_str.is_empty() {
-        self.last_content_cache_len = output_str.len();
+        let content_start = self.buffer.len();
         if !self.push_output_str(output_str) {
           return;
         }
+        self.last_content_start = Some(content_start);
       }
     }
     self.last_node_is_inline = is_inline;
