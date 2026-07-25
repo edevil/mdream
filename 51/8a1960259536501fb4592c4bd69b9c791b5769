@@ -1,0 +1,47 @@
+crates/core/src/convert/mod.rs
+  s_128f9b89fa8ad8::t_1393ea74c1bba4 4,208,588,786,857-869,1259,1403,1421-1423,1435-1438,1447-1449,1460-1468,1514-1516,1521-1523,1874-1878,1895-1898,1908-1937
+crates/core/src/convert/output.rs
+  s_267414b4cf5871::t_05dc6de82364b7 1372-1376
+crates/core/src/lib.rs
+  s_128f9b89fa8ad8::t_d9982477011396 13-366,443,453-454,456,458,473,476-482,508,544-545,547,549,595-601,608
+crates/core/tests/bounded_streaming.rs
+  s_6452cdb8b6939f::t_4797df3bc7c9fc 191-233
+crates/core/tests/streaming_drain.rs
+  s_128f9b89fa8ad8::t_927ccdf67e24b3 288-301
+packages/js/test/unit/streaming-parity.test.ts
+  s_128f9b89fa8ad8::t_32859dd9b254ca 124-134
+packages/mdream/test/unit/nodes/html-to-markdown-parity.test.ts
+  s_128f9b89fa8ad8::t_bc10a134523e08 39-44
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "518a1960259536501fb4592c4bd69b9c791b5769",
+  "prompts": {},
+  "sessions": {
+    "s_128f9b89fa8ad8": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_0659e139affe8wbKn0WHXGrTXt",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "André Cruz <acruz@cloudflare.com>"
+    },
+    "s_267414b4cf5871": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_0659e1454ffeoKUFb9McR4j5CO",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "André Cruz <acruz@cloudflare.com>"
+    },
+    "s_6452cdb8b6939f": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_0659e1424ffe1WiFw1lWamGTyj",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "André Cruz <acruz@cloudflare.com>"
+    }
+  }
+}

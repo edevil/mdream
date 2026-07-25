@@ -1,0 +1,19 @@
+crates/core/tests/bounded_streaming.rs
+  s_f74c742e29a4b8::t_ab74c4199134fc 174-198
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "58522c1c75decd388b6efbf003000f931e747a24",
+  "prompts": {},
+  "sessions": {
+    "s_f74c742e29a4b8": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_0659e1413ffephtpCuUrJm7g21",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "André Cruz <acruz@cloudflare.com>"
+    }
+  }
+}
