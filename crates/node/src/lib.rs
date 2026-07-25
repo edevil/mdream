@@ -112,7 +112,7 @@ pub struct HtmlToMarkdownOptions {
 // ── Type conversion (NAPI → core) ──
 
 fn to_core_opts(
-  options: Option<HtmlToMarkdownOptions>,
+  mut options: Option<HtmlToMarkdownOptions>,
 ) -> Result<(
   mdream::types::HTMLToMarkdownOptions,
   mdream::types::OutputFormat,
@@ -145,17 +145,70 @@ fn to_core_opts(
     }
   };
 
-  let core_options = mdream::types::HTMLToMarkdownOptions {
-    origin: options.as_ref().and_then(|o| o.origin.clone()),
-    url_policy,
-    clean_urls: options.as_ref().and_then(|o| o.clean_urls).unwrap_or(false),
-    clean,
-    wrap_width: options
-      .as_ref()
-      .and_then(|o| o.wrap_width)
-      .map_or(0, |w| w as usize),
-    plugins: options.and_then(|o| {
-      o.plugins.map(|p| mdream::types::PluginConfig {
+  let plugins = options
+    .as_mut()
+    .and_then(|o| o.plugins.take())
+    .map(|p| -> Result<mdream::types::PluginConfig> {
+      let tag_overrides = p
+        .tag_overrides
+        .map(|overrides| {
+          overrides
+            .into_iter()
+            .map(|(tag_name, ov)| {
+              let has_alias_overrides = ov.enter.is_some()
+                || ov.exit.is_some()
+                || ov.spacing.is_some()
+                || ov.is_inline.is_some()
+                || ov.is_self_closing.is_some()
+                || ov.collapses_inner_white_space.is_some();
+              let alias_tag_id = ov
+                .alias
+                .as_ref()
+                .map(|alias| {
+                  let mut normalized = alias.clone();
+                  normalized.make_ascii_lowercase();
+                  mdream::consts::get_tag_id(&normalized).ok_or_else(|| {
+                    napi::Error::new(
+                      napi::Status::InvalidArg,
+                      format!("Unknown tag alias: {alias}"),
+                    )
+                  })
+                })
+                .transpose()?;
+              if alias_tag_id.is_some() && has_alias_overrides {
+                return Err(napi::Error::new(
+                  napi::Status::InvalidArg,
+                  format!("Tag override {tag_name:?} cannot combine alias with override fields"),
+                ));
+              }
+              let spacing = ov
+                .spacing
+                .map(|spacing| {
+                  <[u8; 2]>::try_from(spacing).map_err(|_| {
+                    napi::Error::new(
+                      napi::Status::InvalidArg,
+                      format!("Tag override {tag_name:?} spacing must contain exactly two values"),
+                    )
+                  })
+                })
+                .transpose()?;
+              Ok((
+                tag_name,
+                mdream::types::TagOverrideConfig {
+                  enter: ov.enter,
+                  exit: ov.exit,
+                  spacing,
+                  is_inline: ov.is_inline,
+                  is_self_closing: ov.is_self_closing,
+                  collapses_inner_white_space: ov.collapses_inner_white_space,
+                  alias_tag_id,
+                },
+              ))
+            })
+            .collect::<Result<Vec<_>>>()
+        })
+        .transpose()?;
+      Ok(mdream::types::PluginConfig {
         filter: p.filter.map(|f| mdream::types::FilterConfig {
           include: f.include,
           exclude: f.exclude,
@@ -182,35 +235,21 @@ fn to_core_opts(
         extraction: p.extraction.map(|e| mdream::types::ExtractionConfig {
           selectors: e.selectors,
         }),
-        tag_overrides: p.tag_overrides.map(|overrides| {
-          overrides
-            .into_iter()
-            .map(|(tag_name, ov)| {
-              let alias_tag_id = ov
-                .alias
-                .as_ref()
-                .and_then(|a| mdream::consts::get_tag_id(a));
-              let config = mdream::types::TagOverrideConfig {
-                enter: ov.enter,
-                exit: ov.exit,
-                spacing: ov.spacing.and_then(|s| {
-                  if s.len() >= 2 {
-                    Some([s[0], s[1]])
-                  } else {
-                    None
-                  }
-                }),
-                is_inline: ov.is_inline,
-                is_self_closing: ov.is_self_closing,
-                collapses_inner_white_space: ov.collapses_inner_white_space,
-                alias_tag_id,
-              };
-              (tag_name, config)
-            })
-            .collect()
-        }),
+        tag_overrides,
       })
-    }),
+    })
+    .transpose()?;
+
+  let core_options = mdream::types::HTMLToMarkdownOptions {
+    origin: options.as_ref().and_then(|o| o.origin.clone()),
+    url_policy,
+    clean_urls: options.as_ref().and_then(|o| o.clean_urls).unwrap_or(false),
+    clean,
+    wrap_width: options
+      .as_ref()
+      .and_then(|o| o.wrap_width)
+      .map_or(0, |w| w as usize),
+    plugins,
   };
   Ok((core_options, format))
 }
@@ -260,7 +299,8 @@ pub fn html_to_markdown(
 ) -> Result<MdreamNapiResult> {
   catch_panic(move || {
     let (opts, format) = to_core_opts(options)?;
-    let result = mdream::html_to_format_result(&html, opts, format);
+    let result = mdream::try_html_to_format_result(&html, opts, format)
+      .map_err(|error| napi::Error::new(napi::Status::InvalidArg, error.to_string()))?;
     Ok(result_to_napi(result))
   })
 }
@@ -275,7 +315,8 @@ pub fn html_to_markdown_bytes(
   let text = text.to_string();
   catch_panic(move || {
     let (opts, format) = to_core_opts(options)?;
-    let result = mdream::html_to_format_result(&text, opts, format);
+    let result = mdream::try_html_to_format_result(&text, opts, format)
+      .map_err(|error| napi::Error::new(napi::Status::InvalidArg, error.to_string()))?;
     Ok(result_to_napi(result))
   })
 }
@@ -292,7 +333,8 @@ impl MarkdownStream {
   pub fn new(options: Option<HtmlToMarkdownOptions>) -> Result<Self> {
     let (opts, format) = to_core_opts(options)?;
     Ok(Self {
-      inner: mdream::MarkdownStreamProcessor::new_with_format(opts, format),
+      inner: mdream::MarkdownStreamProcessor::try_new_with_format(opts, format)
+        .map_err(|error| napi::Error::new(napi::Status::InvalidArg, error.to_string()))?,
       utf8_carry: Vec::new(),
     })
   }

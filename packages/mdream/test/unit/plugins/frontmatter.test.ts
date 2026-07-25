@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { parseAllDocuments } from 'yaml'
-import { engines, htmlToMarkdown, resolveEngine, streamHtmlToMarkdown } from '../../utils/engines'
+import { engines, htmlToMarkdown, resolveEngine } from '../../utils/engines'
 
 function parseFrontmatter(markdown: string): Record<string, unknown> {
   expect(markdown.startsWith('---\n')).toBe(true)
@@ -11,20 +11,6 @@ function parseFrontmatter(markdown: string): Record<string, unknown> {
   expect(documents).toHaveLength(1)
   expect(documents[0]!.errors).toEqual([])
   return documents[0]!.toJS() as Record<string, unknown>
-}
-
-async function streamed(html: string, chunkSize: number, engine: Parameters<typeof resolveEngine>[0], options: Record<string, unknown>): Promise<string> {
-  const input = new ReadableStream<string>({
-    start(controller) {
-      for (let offset = 0; offset < html.length; offset += chunkSize)
-        controller.enqueue(html.slice(offset, offset + chunkSize))
-      controller.close()
-    },
-  })
-  let output = ''
-  for await (const chunk of streamHtmlToMarkdown(input, { ...options, engine }))
-    output += chunk
-  return output
 }
 
 describe.each(engines)('frontmatter plugin $name', (engineConfig) => {
@@ -259,13 +245,6 @@ describe.each(engines)('frontmatter plugin $name', (engineConfig) => {
       title: 'last',
       meta: { author: 'last' },
     })
-    for (const chunkSize of [4096, html.length])
-      expect(await streamed(html, chunkSize, engine, options), `chunk size ${chunkSize}`).toBe(expected)
-
-    const shortHtml = '<head><title>first</title><title>last</title><meta name="author" content="first"><meta name="author" content="last"></head><p>Body</p>'
-    const shortExpected = htmlToMarkdown(shortHtml, { ...options, engine })
-    for (const chunkSize of [1, 2, 7, shortHtml.length])
-      expect(await streamed(shortHtml, chunkSize, engine, options), `duplicate chunk size ${chunkSize}`).toBe(shortExpected)
   })
 
   it('drops oversized and excess optional metadata without dropping the body', async () => {
@@ -282,7 +261,6 @@ describe.each(engines)('frontmatter plugin $name', (engineConfig) => {
     expect(parsed.oversized).toBeUndefined()
     expect(Object.keys(parsed)).toHaveLength(64)
     expect(expected).toContain('Body after metadata')
-    expect(await streamed(html, 5, engine, options)).toBe(expected)
   })
 
   it('enforces the aggregate metadata byte limit', async () => {

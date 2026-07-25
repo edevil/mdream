@@ -1431,7 +1431,8 @@ function processTextBuffer(textBuffer: string, state: ParseState, handleEvent: (
   const firstBlockParent = parentsToIncrement.at(-1)
 
   // Handle whitespace trimming
-  if (containsWhitespace && !firstBlockParent?.childTextNodeIndex) {
+  const isRootInline = !firstBlockParent?.parent && firstBlockParent?.tagHandler?.isInline
+  if (containsWhitespace && !firstBlockParent?.childTextNodeIndex && !isRootInline) {
     let start = 0
     while (start < text.length && (inPreTag ? (text.charCodeAt(start) === NEWLINE_CHAR || text.charCodeAt(start) === CARRIAGE_RETURN_CHAR) : isWhitespace(text.charCodeAt(start)))) {
       start++
@@ -1775,11 +1776,11 @@ function processOpeningTag(
   const supportedForeignSelfClose = result.selfClosing
     && (inSupportedSvgContent(state.currentNode) || builtinTagId === TAG_SVG)
   const overrideSelfClosing = overrideHandler?.overridesSelfClosing === true
-    && overrideHandler.isSelfClosing === true
   const aliasedVoid = overrideHandler?.aliasTagId !== undefined
     && overrideHandler.aliasTagId !== builtinTagId
     && overrideHandler.isSelfClosing === true
-  const selfClosing = intrinsicVoid || overrideSelfClosing || aliasedVoid || supportedForeignSelfClose
+  const selfClosing = (overrideSelfClosing ? overrideHandler.isSelfClosing === true : intrinsicVoid || aliasedVoid)
+    || supportedForeignSelfClose
 
   if (state.overflow) {
     if (!selfClosing)

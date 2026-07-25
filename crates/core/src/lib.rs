@@ -369,23 +369,166 @@ mod carry_scanner_tests {
 // pulls in everything needed to call `html_to_markdown` without reaching into
 // the `types` module.
 pub use types::{
-  CleanConfig, ExtractionConfig, FilterConfig, FrontmatterConfig, HTMLToMarkdownOptions,
-  IsolateMainConfig, MdreamResult, OutputFormat, PluginConfig, StreamingError, StreamingLimits,
-  TagOverrideConfig, TailwindConfig, UnsupportedStreamingOption, UrlPolicy,
+  CleanConfig, ConfigurationError, ConversionMode, ExtractionConfig, FilterConfig,
+  FrontmatterConfig, HTMLToMarkdownOptions, IsolateMainConfig, MdreamResult, OutputFormat,
+  PluginConfig, StreamingError, StreamingLimits, TagOverrideConfig, TailwindConfig,
+  UnsupportedStreamingOption, UrlPolicy,
 };
 
 // Re-export `get_tag_id` so callers can resolve tag names to IDs (for
 // `TagOverrideConfig::alias_tag_id`) without reaching into `consts` directly.
 pub use consts::get_tag_id;
 
+fn tag_override_requires_pair(tag: &str) -> bool {
+  matches!(
+    consts::get_tag_id_ci_bytes(tag.as_bytes()),
+    Some(consts::TAG_A | consts::TAG_BLOCKQUOTE | consts::TAG_CODE | consts::TAG_PRE)
+  )
+}
+
+/// Validate converter options for one-shot or strict streaming use.
+pub fn validate_options(
+  options: &HTMLToMarkdownOptions,
+  mode: ConversionMode,
+) -> Result<(), ConfigurationError> {
+  if mode == ConversionMode::Streaming {
+    if options.clean.as_ref().is_some_and(|clean| clean.fragments) {
+      return Err(ConfigurationError::UnsupportedStreamingOption(
+        UnsupportedStreamingOption::CleanFragments,
+      ));
+    }
+    if let Some(plugins) = &options.plugins {
+      for (enabled, option) in [
+        (
+          plugins.isolate_main.is_some(),
+          UnsupportedStreamingOption::IsolateMain,
+        ),
+        (
+          plugins.frontmatter.is_some(),
+          UnsupportedStreamingOption::Frontmatter,
+        ),
+        (
+          plugins.extraction.is_some(),
+          UnsupportedStreamingOption::Extraction,
+        ),
+      ] {
+        if enabled {
+          return Err(ConfigurationError::UnsupportedStreamingOption(option));
+        }
+      }
+    }
+  }
+
+  if let Some(overrides) = options
+    .plugins
+    .as_ref()
+    .and_then(|plugins| plugins.tag_overrides.as_ref())
+  {
+    for (tag, config) in overrides {
+      if let Some(alias_tag_id) = config.alias_tag_id {
+        if alias_tag_id as usize >= consts::MAX_TAG_ID {
+          return Err(ConfigurationError::TagAliasOutOfRange {
+            tag: tag.clone(),
+            alias_tag_id,
+          });
+        }
+        if config.enter.is_some()
+          || config.exit.is_some()
+          || config.spacing.is_some()
+          || config.is_inline.is_some()
+          || config.is_self_closing.is_some()
+          || config.collapses_inner_white_space.is_some()
+        {
+          return Err(ConfigurationError::TagAliasWithOverrides { tag: tag.clone() });
+        }
+      }
+      if tag_override_requires_pair(tag) && config.enter.is_some() != config.exit.is_some() {
+        return Err(ConfigurationError::UnpairedTagOverride { tag: tag.clone() });
+      }
+    }
+  }
+  Ok(())
+}
+
+fn normalize_options(mut options: HTMLToMarkdownOptions) -> HTMLToMarkdownOptions {
+  if let Some(overrides) = options
+    .plugins
+    .as_mut()
+    .and_then(|plugins| plugins.tag_overrides.as_mut())
+  {
+    for (tag, _) in overrides {
+      tag.make_ascii_lowercase();
+    }
+  }
+  options
+}
+
+fn safe_options(mut options: HTMLToMarkdownOptions) -> HTMLToMarkdownOptions {
+  options = normalize_options(options);
+  if let Some(overrides) = options
+    .plugins
+    .as_mut()
+    .and_then(|plugins| plugins.tag_overrides.as_mut())
+  {
+    for (tag, config) in overrides {
+      if config
+        .alias_tag_id
+        .is_some_and(|alias_tag_id| alias_tag_id as usize >= consts::MAX_TAG_ID)
+        || (config.alias_tag_id.is_some()
+          && (config.enter.is_some()
+            || config.exit.is_some()
+            || config.spacing.is_some()
+            || config.is_inline.is_some()
+            || config.is_self_closing.is_some()
+            || config.collapses_inner_white_space.is_some()))
+      {
+        config.alias_tag_id = None;
+      }
+      if tag_override_requires_pair(tag) && config.enter.is_some() != config.exit.is_some() {
+        if config.enter.is_none() {
+          config.enter = Some(String::new());
+        }
+        if config.exit.is_none() {
+          config.exit = Some(String::new());
+        }
+      }
+    }
+  }
+  options
+}
+
+fn requires_deferred_streaming(options: &HTMLToMarkdownOptions) -> bool {
+  options.clean.as_ref().is_some_and(|clean| clean.fragments)
+    || options
+      .plugins
+      .as_ref()
+      .is_some_and(|plugins| plugins.isolate_main.is_some())
+}
+
 /// Convert HTML to Markdown in a single pass.
 pub fn html_to_markdown(html: &str, options: HTMLToMarkdownOptions) -> String {
-  html_to_format(html, options, OutputFormat::Markdown)
+  html_to_format(html, safe_options(options), OutputFormat::Markdown)
+}
+
+/// Convert HTML to Markdown after validating the complete configuration.
+pub fn try_html_to_markdown(
+  html: &str,
+  options: HTMLToMarkdownOptions,
+) -> Result<String, ConfigurationError> {
+  try_html_to_format(html, options, OutputFormat::Markdown)
 }
 
 /// Convert HTML to readable plain text in a single pass.
 pub fn html_to_text(html: &str, options: HTMLToMarkdownOptions) -> String {
-  html_to_format(html, options, OutputFormat::Text)
+  html_to_format(html, safe_options(options), OutputFormat::Text)
+}
+
+/// Convert HTML to text after validating the complete configuration.
+pub fn try_html_to_text(
+  html: &str,
+  options: HTMLToMarkdownOptions,
+) -> Result<String, ConfigurationError> {
+  try_html_to_format(html, options, OutputFormat::Text)
 }
 
 /// Convert HTML to the requested output format in a single pass.
@@ -393,14 +536,53 @@ pub fn html_to_format(html: &str, options: HTMLToMarkdownOptions, format: Output
   html_to_format_result(html, options, format).markdown
 }
 
+/// Convert HTML to the requested format after validating the configuration.
+pub fn try_html_to_format(
+  html: &str,
+  options: HTMLToMarkdownOptions,
+  format: OutputFormat,
+) -> Result<String, ConfigurationError> {
+  Ok(try_html_to_format_result(html, options, format)?.markdown)
+}
+
 /// Convert HTML to Markdown with full results (extraction, frontmatter).
 pub fn html_to_markdown_result(html: &str, options: HTMLToMarkdownOptions) -> MdreamResult {
-  html_to_format_result(html, options, OutputFormat::Markdown)
+  html_to_format_result(html, safe_options(options), OutputFormat::Markdown)
+}
+
+/// Convert HTML to Markdown with side data after validating the configuration.
+pub fn try_html_to_markdown_result(
+  html: &str,
+  options: HTMLToMarkdownOptions,
+) -> Result<MdreamResult, ConfigurationError> {
+  try_html_to_format_result(html, options, OutputFormat::Markdown)
 }
 
 /// Convert HTML to plain text with full results (extraction, frontmatter).
 pub fn html_to_text_result(html: &str, options: HTMLToMarkdownOptions) -> MdreamResult {
-  html_to_format_result(html, options, OutputFormat::Text)
+  html_to_format_result(html, safe_options(options), OutputFormat::Text)
+}
+
+/// Convert HTML to text with side data after validating the configuration.
+pub fn try_html_to_text_result(
+  html: &str,
+  options: HTMLToMarkdownOptions,
+) -> Result<MdreamResult, ConfigurationError> {
+  try_html_to_format_result(html, options, OutputFormat::Text)
+}
+
+/// Convert HTML with side data after validating the configuration.
+pub fn try_html_to_format_result(
+  html: &str,
+  options: HTMLToMarkdownOptions,
+  format: OutputFormat,
+) -> Result<MdreamResult, ConfigurationError> {
+  validate_options(&options, ConversionMode::OneShot)?;
+  Ok(html_to_format_result(
+    html,
+    normalize_options(options),
+    format,
+  ))
 }
 
 /// Convert HTML to the requested format with full results (extraction, frontmatter).
@@ -409,6 +591,7 @@ pub fn html_to_format_result(
   options: HTMLToMarkdownOptions,
   format: OutputFormat,
 ) -> MdreamResult {
+  let options = safe_options(options);
   let capacity = (html.len() / 3).clamp(1024, 256 * 1024);
   let mut state = ConvertState::new(options, capacity, format);
   let leftover = state.process_html(html);
@@ -441,6 +624,7 @@ pub struct MarkdownStreamProcessor {
   state: ConvertState,
   buffer: String,
   carry_scanner: CarryScanner,
+  defer_output: bool,
 }
 
 impl MarkdownStreamProcessor {
@@ -448,15 +632,39 @@ impl MarkdownStreamProcessor {
     Self::new_with_format(options, OutputFormat::Markdown)
   }
 
+  /// Create a strict streaming converter after validating all options.
+  pub fn try_new(options: HTMLToMarkdownOptions) -> Result<Self, ConfigurationError> {
+    Self::try_new_with_format(options, OutputFormat::Markdown)
+  }
+
   /// Create a streaming converter for the requested output format.
   pub fn new_with_format(options: HTMLToMarkdownOptions, format: OutputFormat) -> Self {
+    let defer_output = requires_deferred_streaming(&options);
+    let options = safe_options(options);
     let mut state = ConvertState::new(options, 4096, format);
     state.enable_incremental_lexing();
     Self {
       state,
       buffer: String::new(),
       carry_scanner: CarryScanner::default(),
+      defer_output,
     }
+  }
+
+  /// Create a strict streaming converter for the requested output format.
+  pub fn try_new_with_format(
+    options: HTMLToMarkdownOptions,
+    format: OutputFormat,
+  ) -> Result<Self, ConfigurationError> {
+    validate_options(&options, ConversionMode::Streaming)?;
+    let mut state = ConvertState::new(normalize_options(options), 4096, format);
+    state.enable_incremental_lexing();
+    Ok(Self {
+      state,
+      buffer: String::new(),
+      carry_scanner: CarryScanner::default(),
+      defer_output: false,
+    })
   }
 
   /// Like `new`, but with draining disabled (drain-transparency test only).
@@ -481,7 +689,11 @@ impl MarkdownStreamProcessor {
         self.carry_scanner.compact_numeric(&mut self.buffer);
       }
     }
-    self.state.get_markdown_chunk()
+    if self.defer_output {
+      String::new()
+    } else {
+      self.state.get_markdown_chunk()
+    }
   }
 
   pub fn finish(&mut self) -> String {
@@ -492,7 +704,11 @@ impl MarkdownStreamProcessor {
       self.state.process_html(&chunk)
     };
     self.state.finalize(&leftover);
-    self.state.get_markdown_chunk()
+    if self.defer_output {
+      self.state.get_markdown()
+    } else {
+      self.state.get_markdown_chunk()
+    }
   }
 }
 
@@ -525,25 +741,20 @@ impl BoundedMarkdownStreamProcessor {
     format: OutputFormat,
     limits: StreamingLimits,
   ) -> Result<Self, StreamingError> {
-    if options.clean.as_ref().is_some_and(|clean| clean.fragments) {
-      return Err(StreamingError::UnsupportedOption(
-        UnsupportedStreamingOption::CleanFragments,
-      ));
-    }
-    if let Some(plugins) = &options.plugins {
-      if plugins.frontmatter.is_some() {
-        return Err(StreamingError::UnsupportedOption(
-          UnsupportedStreamingOption::Frontmatter,
-        ));
-      }
-      if plugins.extraction.is_some() {
-        return Err(StreamingError::UnsupportedOption(
-          UnsupportedStreamingOption::Extraction,
-        ));
-      }
+    if let Err(error) = validate_options(&options, ConversionMode::Streaming) {
+      return Err(match error {
+        ConfigurationError::UnsupportedStreamingOption(option) => {
+          StreamingError::UnsupportedOption(option)
+        }
+        _ => StreamingError::InvalidConfiguration,
+      });
     }
 
-    let mut state = ConvertState::new_bounded(options, format, limits.max_buffered_bytes);
+    let mut state = ConvertState::new_bounded(
+      normalize_options(options),
+      format,
+      limits.max_buffered_bytes,
+    );
     state.enable_incremental_lexing();
     Ok(Self {
       state,

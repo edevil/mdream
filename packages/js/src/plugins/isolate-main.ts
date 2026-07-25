@@ -34,13 +34,14 @@ import { createPlugin } from '../pluggable/plugin'
 export function isolateMainPlugin(): TransformPlugin {
   let mainElement: ElementNode | null = null
   let firstHeaderElement: ElementNode | null = null
+  let fallbackOutputStart: number | null = null
   let afterFooter = false
 
   // Header tag IDs for quick lookup
   const headerTagIds = new Set([TAG_H1, TAG_H2, TAG_H3, TAG_H4, TAG_H5, TAG_H6])
 
   return createPlugin({
-    beforeNodeProcess(event: any) {
+    beforeNodeProcess(event: any, state) {
       const { node } = event
 
       // Parsed template contents are available to hooks/extraction but cannot
@@ -55,6 +56,11 @@ export function isolateMainPlugin(): TransformPlugin {
         // Priority 1: Look for explicit <main> element first (within 5 depth)
         if (!mainElement && element.tagId === TAG_MAIN && element.depth <= 5) {
           mainElement = element
+          state.buffer.length = fallbackOutputStart ?? state.buffer.length
+          state.lastContentCache = state.buffer.at(-1)
+          state.lastNode = undefined
+          state.lastTextNode = undefined
+          state.lastNewLines = 0
           return // Include the main element
         }
 
@@ -97,6 +103,7 @@ export function isolateMainPlugin(): TransformPlugin {
           // Only use this heading if it's not in a header tag
           if (!isInHeaderTag) {
             firstHeaderElement = element
+            fallbackOutputStart = state.buffer.length
             return // Include the header
           }
         }

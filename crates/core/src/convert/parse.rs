@@ -632,6 +632,36 @@ impl ConvertState {
     }
   }
 
+  fn discard_isolate_fallback(&mut self) {
+    self.buffer.truncate(
+      self
+        .isolate_fallback_output_start
+        .unwrap_or(self.buffer.len()),
+    );
+    self.last_content_start = None;
+    self.last_text_node_contains_whitespace = false;
+    self.has_last_text_node = false;
+    self.last_node_is_inline = false;
+    self.pending_inline_whitespace = false;
+    self.last_yielded_length = 0;
+    self.has_streamed_output = false;
+    self.flushed_tail = [0; 2];
+    self.buffer_start_column = 0;
+    self.output_column = 0;
+    self.clean_newline_run = 0;
+    self.skip_current_link = false;
+    self.link_bracket_pos = 0;
+    self.open_markers.clear();
+    self.code_spans.clear();
+    self.code_fence = None;
+    self.blockquotes.clear();
+    self.heading_slugs.clear();
+    self.fragment_links.clear();
+    self.in_heading = false;
+    self.heading_buffer_start = 0;
+    self.self_link_heading = None;
+  }
+
   pub(crate) fn process_opening_tag(
     &mut self,
     tag_name: &str,
@@ -670,19 +700,22 @@ impl ConvertState {
       };
     }
 
-    let override_self_closing = self
+    let override_config = self
       .options
       .plugins
       .as_ref()
       .and_then(|plugins| plugins.tag_overrides.as_ref())
       .and_then(|overrides| overrides.iter().find(|(name, _)| name == tag_name))
-      .is_some_and(|(_, config)| config.is_self_closing == Some(true));
+      .map(|(_, config)| config.clone());
     let aliased_void = is_alias && tag_handler.is_some_and(|handler| handler.is_self_closing);
     let supported_foreign_self_close = syntactic_self_closing
       && (self.in_supported_svg_content() || builtin_tag_id == Some(TAG_SVG));
-    let self_closing = (is_html_void_tag(builtin_tag_id) && !self.in_supported_svg_content())
-      || override_self_closing
-      || aliased_void
+    let default_self_closing =
+      (is_html_void_tag(builtin_tag_id) && !self.in_supported_svg_content()) || aliased_void;
+    let self_closing = override_config
+      .as_ref()
+      .and_then(|config| config.is_self_closing)
+      .unwrap_or(default_self_closing)
       || supported_foreign_self_close;
 
     if self.overflow.is_some() {
@@ -852,26 +885,31 @@ impl ConvertState {
       Some(tag_name.to_string())
     };
 
-    let (h_inline, h_excludes, h_non_nesting, h_collapses, h_spacing) = if let Some(h) = tag_handler
-    {
-      (
-        h.is_inline,
-        h.excludes_text_nodes,
-        h.is_non_nesting,
-        h.collapses_inner_white_space,
-        h.spacing,
-      )
-    } else if tag_id.is_none() {
-      // Truly unknown tag (not in dictionary, no override): treat as inline
-      // with zero spacing so it doesn't fragment the surrounding paragraph.
-      // `<p>before <ex>foo</ex> after</p>` becomes `before foo after`. Users
-      // opt custom elements into block semantics via `tagOverrides`.
-      (true, false, false, false, Some(NO_SPACING))
-    } else {
-      // Built-in tag without a dedicated handler (e.g. caption, span fallback):
-      // keep previous block-default behaviour.
-      (false, false, false, false, None)
-    };
+    let (mut h_inline, h_excludes, h_non_nesting, mut h_collapses, mut h_spacing) =
+      if let Some(h) = tag_handler {
+        (
+          h.is_inline,
+          h.excludes_text_nodes,
+          h.is_non_nesting,
+          h.collapses_inner_white_space,
+          h.spacing,
+        )
+      } else if tag_id.is_none() {
+        // Truly unknown tag (not in dictionary, no override): treat as inline
+        // with zero spacing so it doesn't fragment the surrounding paragraph.
+        // `<p>before <ex>foo</ex> after</p>` becomes `before foo after`. Users
+        // opt custom elements into block semantics via `tagOverrides`.
+        (true, false, false, false, Some(NO_SPACING))
+      } else {
+        // Built-in tag without a dedicated handler (e.g. caption, span fallback):
+        // keep previous block-default behaviour.
+        (false, false, false, false, None)
+      };
+    if let Some(config) = override_config.as_ref() {
+      h_inline = config.is_inline.unwrap_or(h_inline);
+      h_collapses = config.collapses_inner_white_space.unwrap_or(h_collapses);
+      h_spacing = config.spacing.or(h_spacing);
+    }
 
     let mut tag = if let Some(mut pooled) = self.node_pool.pop() {
       pooled.custom_name = custom_name;
@@ -1017,6 +1055,7 @@ impl ConvertState {
         let is_main = tag_id == Some(TAG_MAIN);
         if !self.isolate_main_found && is_main && self.depth <= 50 {
           self.isolate_main_found = true;
+          self.discard_isolate_fallback();
         }
         if self.isolate_main_found {
           if self.isolate_main_closed {
@@ -1029,6 +1068,7 @@ impl ConvertState {
             && self.depth_map[TAG_HEADER as usize] == 0
           {
             self.isolate_first_header_depth = Some(self.depth);
+            self.isolate_fallback_output_start = Some(self.buffer.len());
           }
           if let Some(header_depth) = self.isolate_first_header_depth
             && !self.isolate_after_footer

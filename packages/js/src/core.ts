@@ -1,7 +1,7 @@
 import type { BuiltinPlugins, MdreamOptions, TransformPlugin } from './types'
 import { createMarkdownProcessor } from './markdown-processor'
 import { streamHtmlToMarkdown as createMarkdownStream } from './stream'
-import { buildTagOverrideHandlers, validateUrlPolicy } from './tags'
+import { buildTagOverrideHandlers, validateOptions } from './tags'
 
 /** Imperative plugin used by the tree-shakable converter. */
 export type Plugin = TransformPlugin
@@ -31,7 +31,7 @@ function resolveTagOverrides(options: CoreOptions) {
 
 /** Convert HTML without bundling the optional declarative built-in plugins. */
 export function htmlToMarkdown(html: string, options: CoreOptions = {}): string {
-  validateUrlPolicy(options.urlPolicy)
+  validateOptions(options as MdreamOptions, 'one-shot')
   const plugins = resolveHooks(options)
   const tagOverrides = resolveTagOverrides(options)
   const tagOverrideHandlers = tagOverrides
@@ -47,7 +47,7 @@ export function streamHtmlToMarkdown(
   htmlStream: ReadableStream<Uint8Array | string> | null,
   options: CoreOptions = {},
 ): AsyncIterable<string> {
-  validateUrlPolicy(options.urlPolicy)
+  validateOptions(options as MdreamOptions, 'streaming')
   const plugins = resolveHooks(options)
   const tagOverrides = resolveTagOverrides(options)
   const tagOverrideHandlers = tagOverrides

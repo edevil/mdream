@@ -1136,23 +1136,23 @@ export function buildTagOverrideHandlers(overrides: Record<string, TagOverride |
 
   for (const tagName in overrides) {
     const override = overrides[tagName]
+    const normalizedTagName = asciiLowercase(tagName)
     if (!override)
-      continue
+      throw new ConfigurationError(`Invalid tag override for ${JSON.stringify(tagName)}`)
 
     if (typeof override === 'string') {
-      // Alias: look up the target tag's handler
-      const targetId = TagIdMap[override as keyof typeof TagIdMap]
-      if (targetId !== undefined) {
-        const baseHandler = tagHandlers[targetId]
-        if (baseHandler) {
-          result.set(tagName, { ...baseHandler, aliasTagId: targetId })
-        }
-      }
+      const alias = asciiLowercase(override)
+      const targetId = TagIdMap[alias as keyof typeof TagIdMap]
+      if (typeof targetId !== 'number')
+        throw new ConfigurationError(`Unknown tag alias: ${override}`)
+      const baseHandler = tagHandlers[targetId]
+      result.set(normalizedTagName, { ...baseHandler, aliasTagId: targetId })
     }
     else {
       // Override object: start with base handler if tag is known
-      const baseId = TagIdMap[tagName as keyof typeof TagIdMap]
-      const baseHandler = baseId !== undefined ? tagHandlers[baseId] : undefined
+      validateTagOverride(normalizedTagName, override)
+      const baseId = TagIdMap[normalizedTagName as keyof typeof TagIdMap]
+      const baseHandler = typeof baseId === 'number' ? tagHandlers[baseId] : undefined
       const handler: TagHandler = baseHandler ? { ...baseHandler } : {}
 
       if (override.enter !== undefined) {
@@ -1179,9 +1179,60 @@ export function buildTagOverrideHandlers(overrides: Record<string, TagOverride |
         handler.collapsesInnerWhiteSpace = override.collapsesInnerWhiteSpace
       }
 
-      result.set(tagName, handler)
+      result.set(normalizedTagName, handler)
     }
   }
 
   return result
+}
+
+export type ConversionMode = 'one-shot' | 'streaming'
+
+export class ConfigurationError extends TypeError {
+  override name = 'ConfigurationError'
+}
+
+const PAIRED_OVERRIDE_TAGS = new Set(['a', 'blockquote', 'code', 'pre'])
+
+function asciiLowercase(value: string): string {
+  return value.replace(/[A-Z]/g, char => String.fromCharCode(char.charCodeAt(0) + 32))
+}
+
+function validateTagOverride(tagName: string, override: TagOverride): void {
+  if (typeof override !== 'object')
+    throw new ConfigurationError(`Invalid tag override for ${JSON.stringify(tagName)}`)
+  if (override.enter !== undefined && typeof override.enter !== 'string')
+    throw new ConfigurationError(`Tag override ${JSON.stringify(tagName)} has a non-string enter value`)
+  if (override.exit !== undefined && typeof override.exit !== 'string')
+    throw new ConfigurationError(`Tag override ${JSON.stringify(tagName)} has a non-string exit value`)
+  if (override.spacing !== undefined
+    && (!Array.isArray(override.spacing)
+      || override.spacing.length !== 2
+      || override.spacing.some(value => !Number.isInteger(value) || value < 0 || value > 255))) {
+    throw new ConfigurationError(`Tag override ${JSON.stringify(tagName)} has invalid spacing`)
+  }
+  for (const field of ['isInline', 'isSelfClosing', 'collapsesInnerWhiteSpace'] as const) {
+    if (override[field] !== undefined && typeof override[field] !== 'boolean')
+      throw new ConfigurationError(`Tag override ${JSON.stringify(tagName)} has invalid ${field}`)
+  }
+  if (PAIRED_OVERRIDE_TAGS.has(tagName) && (override.enter !== undefined) !== (override.exit !== undefined))
+    throw new ConfigurationError(`Tag override ${JSON.stringify(tagName)} must override both enter and exit`)
+}
+
+export function validateOptions(options: EngineOptions, mode: ConversionMode): void {
+  validateUrlPolicy(options.urlPolicy)
+  const plugins = options.plugins
+  if (mode === 'streaming') {
+    const clean = options.clean
+    if (clean === true || (typeof clean === 'object' && clean.fragments === true))
+      throw new ConfigurationError('Unsupported streaming option: clean.fragments')
+    if (plugins?.isolateMain)
+      throw new ConfigurationError('Unsupported streaming option: plugins.isolateMain')
+    if (plugins?.frontmatter)
+      throw new ConfigurationError('Unsupported streaming option: plugins.frontmatter')
+    if (plugins?.extraction)
+      throw new ConfigurationError('Unsupported streaming option: plugins.extraction')
+  }
+  if (plugins?.tagOverrides)
+    buildTagOverrideHandlers(plugins.tagOverrides)
 }

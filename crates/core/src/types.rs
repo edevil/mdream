@@ -426,9 +426,22 @@ impl TagOverrideConfig {
   /// ```
   pub fn alias(tag_name: &str) -> Self {
     Self {
-      alias_tag_id: crate::consts::get_tag_id(tag_name),
+      alias_tag_id: crate::consts::get_tag_id_ci_bytes(tag_name.as_bytes()),
       ..Default::default()
     }
+  }
+
+  /// Create a validated alias override.
+  pub fn try_alias(tag_name: &str) -> Result<Self, ConfigurationError> {
+    let Some(alias_tag_id) = crate::consts::get_tag_id_ci_bytes(tag_name.as_bytes()) else {
+      return Err(ConfigurationError::UnknownTagAlias {
+        alias: tag_name.to_string(),
+      });
+    };
+    Ok(Self {
+      alias_tag_id: Some(alias_tag_id),
+      ..Default::default()
+    })
   }
 
   /// Create an override that wraps the tag's content with `enter` and `exit` strings.
@@ -756,14 +769,62 @@ impl Default for StreamingLimits {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum UnsupportedStreamingOption {
   CleanFragments,
+  IsolateMain,
   Frontmatter,
   Extraction,
 }
+
+/// Conversion mode used when validating option capabilities.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ConversionMode {
+  OneShot,
+  Streaming,
+}
+
+/// Invalid or unsupported converter configuration.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ConfigurationError {
+  UnsupportedStreamingOption(UnsupportedStreamingOption),
+  UnknownTagAlias { alias: String },
+  TagAliasOutOfRange { tag: String, alias_tag_id: u8 },
+  TagAliasWithOverrides { tag: String },
+  UnpairedTagOverride { tag: String },
+}
+
+impl std::fmt::Display for ConfigurationError {
+  fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    match self {
+      Self::UnsupportedStreamingOption(option) => {
+        write!(f, "unsupported streaming option: {option:?}")
+      }
+      Self::UnknownTagAlias { alias } => write!(f, "unknown tag alias: {alias}"),
+      Self::TagAliasOutOfRange { tag, alias_tag_id } => {
+        write!(
+          f,
+          "tag override {tag:?} has out-of-range alias id {alias_tag_id}"
+        )
+      }
+      Self::TagAliasWithOverrides { tag } => {
+        write!(
+          f,
+          "tag override {tag:?} cannot combine an alias with override fields"
+        )
+      }
+      Self::UnpairedTagOverride { tag } => write!(
+        f,
+        "tag override {tag:?} must override both enter and exit for this tag"
+      ),
+    }
+  }
+}
+
+impl std::error::Error for ConfigurationError {}
 
 /// Stable failure classes returned by bounded streaming conversion.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum StreamingError {
   UnsupportedOption(UnsupportedStreamingOption),
+  InvalidConfiguration,
   BufferLimitExceeded,
   ParserLimitExceeded,
   AllocationFailed,
@@ -776,6 +837,7 @@ impl std::fmt::Display for StreamingError {
       Self::UnsupportedOption(option) => {
         write!(f, "unsupported bounded streaming option: {option:?}")
       }
+      Self::InvalidConfiguration => f.write_str("invalid streaming configuration"),
       Self::BufferLimitExceeded => f.write_str("retained streaming buffer limit exceeded"),
       Self::ParserLimitExceeded => f.write_str("streaming parser cardinality limit exceeded"),
       Self::AllocationFailed => f.write_str("retained streaming buffer allocation failed"),

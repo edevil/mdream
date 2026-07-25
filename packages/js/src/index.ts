@@ -3,7 +3,7 @@ import { applyClean, resolveClean } from './clean'
 import { createMarkdownProcessor } from './markdown-processor'
 import { resolvePlugins } from './resolve-plugins'
 import { streamHtmlToMarkdown as _streamHtmlToMarkdown } from './stream'
-import { buildTagOverrideHandlers, validateUrlPolicy } from './tags'
+import { buildTagOverrideHandlers, validateOptions } from './tags'
 
 function resolveHooks(options: Partial<MdreamOptions>): TransformPlugin[] | undefined {
   return options.hooks?.length ? options.hooks : undefined
@@ -26,7 +26,7 @@ function convert(html: string, options: EngineOptions, hooks?: TransformPlugin[]
 }
 
 export function htmlToMarkdown(html: string, options: Partial<MdreamOptions> = {}): string {
-  validateUrlPolicy(options.urlPolicy)
+  validateOptions(options, 'one-shot')
   const hooks = resolveHooks(options)
   const markdown = convert(html, options, hooks)
   if (options.clean && options.format !== 'text')
@@ -38,7 +38,7 @@ export function streamHtmlToMarkdown(
   htmlStream: ReadableStream<Uint8Array | string> | null,
   options: Partial<MdreamOptions> = {},
 ): AsyncIterable<string> {
-  validateUrlPolicy(options.urlPolicy)
+  validateOptions(options, 'streaming')
   const hooks = resolveHooks(options)
   const { plugins } = resolvePlugins(options, hooks)
   const tagOverrideHandlers = options.plugins?.tagOverrides
@@ -50,6 +50,7 @@ export function streamHtmlToMarkdown(
 export { ELEMENT_NODE, NodeEventEnter, NodeEventExit, TAG_H1, TAG_H2, TAG_H3, TAG_H4, TAG_H5, TAG_H6, TEXT_NODE } from './const'
 export { createPlugin } from './pluggable/plugin'
 export { withMinimalPreset } from './preset/minimal'
+export { ConfigurationError, validateOptions } from './tags'
 export type { MdreamOptions } from './types'
 export type {
   BuiltinPlugins,

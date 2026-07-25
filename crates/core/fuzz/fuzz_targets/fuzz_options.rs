@@ -1,7 +1,7 @@
 #![no_main]
 use arbitrary::Arbitrary;
 use libfuzzer_sys::fuzz_target;
-use mdream::{html_to_markdown, types::*};
+use mdream::{MarkdownStreamProcessor, html_to_markdown, try_html_to_markdown, types::*};
 
 #[derive(Arbitrary, Debug)]
 struct FuzzInput {
@@ -24,6 +24,15 @@ struct FuzzInput {
     use_tailwind: bool,
     use_extraction: bool,
     extraction_selectors: Vec<String>,
+    use_tag_override: bool,
+    override_tag: String,
+    alias_tag_id: u8,
+    override_enter: Option<String>,
+    override_exit: Option<String>,
+    override_spacing: Option<[u8; 2]>,
+    override_is_inline: Option<bool>,
+    override_is_self_closing: Option<bool>,
+    override_collapses_whitespace: Option<bool>,
 }
 
 fuzz_target!(|input: FuzzInput| {
@@ -79,13 +88,26 @@ fuzz_target!(|input: FuzzInput| {
             None
         };
 
+        let tag_overrides = input.use_tag_override.then(|| vec![(
+            input.override_tag,
+            TagOverrideConfig {
+                enter: input.override_enter,
+                exit: input.override_exit,
+                spacing: input.override_spacing,
+                is_inline: input.override_is_inline,
+                is_self_closing: input.override_is_self_closing,
+                collapses_inner_white_space: input.override_collapses_whitespace,
+                alias_tag_id: Some(input.alias_tag_id),
+            },
+        )]);
+
         Some(PluginConfig {
             filter,
             isolate_main,
             frontmatter,
             tailwind,
             extraction,
-            tag_overrides: None,
+            tag_overrides,
         })
     };
 
@@ -97,5 +119,7 @@ fuzz_target!(|input: FuzzInput| {
         ..Default::default()
     };
 
+    let _ = try_html_to_markdown(&input.html, options.clone());
+    let _ = MarkdownStreamProcessor::try_new(options.clone());
     let _ = html_to_markdown(&input.html, options);
 });

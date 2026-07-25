@@ -586,6 +586,7 @@ pub struct ConvertState {
   isolate_main_found: bool,
   isolate_main_closed: bool,
   isolate_first_header_depth: Option<usize>,
+  isolate_fallback_output_start: Option<usize>,
   isolate_after_footer: bool,
 
   frontmatter_in_head: bool,
@@ -842,6 +843,7 @@ impl ConvertState {
       isolate_main_found: false,
       isolate_main_closed: false,
       isolate_first_header_depth: None,
+      isolate_fallback_output_start: None,
       isolate_after_footer: false,
 
       frontmatter_in_head: false,

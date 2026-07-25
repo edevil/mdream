@@ -28,18 +28,32 @@ fn as_string_vec(v: &JsValue) -> Option<Vec<String>> {
   Some(out)
 }
 
-fn as_u8_vec(v: &JsValue) -> Option<Vec<u8>> {
-  if v.is_undefined() || v.is_null() || !js_sys::Array::is_array(v) {
-    return None;
+fn as_spacing(v: &JsValue) -> Result<Option<[u8; 2]>, JsValue> {
+  if v.is_undefined() || v.is_null() {
+    return Ok(None);
+  }
+  if !js_sys::Array::is_array(v) {
+    return Err(js_sys::TypeError::new("Tag override spacing must be a two-value array").into());
   }
   let arr = js_sys::Array::from(v);
-  let mut out = Vec::with_capacity(arr.length() as usize);
-  for i in 0..arr.length() {
-    if let Some(n) = arr.get(i).as_f64() {
-      out.push(n as u8);
-    }
+  if arr.length() != 2 {
+    return Err(
+      js_sys::TypeError::new("Tag override spacing must contain exactly two values").into(),
+    );
   }
-  Some(out)
+  let mut out = [0; 2];
+  for (index, value) in out.iter_mut().enumerate() {
+    let Some(number) = arr.get(index as u32).as_f64() else {
+      return Err(js_sys::TypeError::new("Tag override spacing values must be numbers").into());
+    };
+    if !number.is_finite() || number.fract() != 0.0 || !(0.0..=255.0).contains(&number) {
+      return Err(
+        js_sys::TypeError::new("Tag override spacing values must be integers from 0 to 255").into(),
+      );
+    }
+    *value = number as u8;
+  }
+  Ok(Some(out))
 }
 
 fn js_object_entries(v: &JsValue) -> Option<Vec<(String, JsValue)>> {
@@ -117,7 +131,7 @@ fn parse_options(
   let plugins = if plugins_val.is_undefined() || plugins_val.is_null() {
     None
   } else {
-    Some(parse_plugins(&plugins_val))
+    Some(parse_plugins(&plugins_val)?)
   };
 
   let wrap_width = get_prop(options, "wrapWidth")
@@ -140,7 +154,7 @@ fn parse_options(
   Ok((core_options, format))
 }
 
-fn parse_plugins(p: &JsValue) -> mdream::types::PluginConfig {
+fn parse_plugins(p: &JsValue) -> Result<mdream::types::PluginConfig, JsValue> {
   let filter_val = get_prop(p, "filter");
   let filter = if filter_val.is_undefined() || filter_val.is_null() {
     None
@@ -191,42 +205,69 @@ fn parse_plugins(p: &JsValue) -> mdream::types::PluginConfig {
   let tag_overrides = if overrides_val.is_undefined() || overrides_val.is_null() {
     None
   } else {
-    js_object_entries(&overrides_val).map(|entries| {
-      entries
-        .into_iter()
-        .map(|(tag_name, ov)| {
-          let alias = as_string(&get_prop(&ov, "alias"));
-          let alias_tag_id = alias.as_ref().and_then(|a| mdream::consts::get_tag_id(a));
-          let spacing_vec = as_u8_vec(&get_prop(&ov, "spacing"));
-          let config = mdream::types::TagOverrideConfig {
-            enter: as_string(&get_prop(&ov, "enter")),
-            exit: as_string(&get_prop(&ov, "exit")),
-            spacing: spacing_vec.and_then(|s| {
-              if s.len() >= 2 {
-                Some([s[0], s[1]])
-              } else {
-                None
-              }
-            }),
-            is_inline: as_bool(&get_prop(&ov, "isInline")),
-            is_self_closing: as_bool(&get_prop(&ov, "isSelfClosing")),
-            collapses_inner_white_space: as_bool(&get_prop(&ov, "collapsesInnerWhiteSpace")),
-            alias_tag_id,
-          };
-          (tag_name, config)
-        })
-        .collect()
-    })
+    js_object_entries(&overrides_val)
+      .map(|entries| {
+        entries
+          .into_iter()
+          .map(|(tag_name, ov)| {
+            let alias = as_string(&get_prop(&ov, "alias"));
+            let alias_tag_id = alias
+              .as_ref()
+              .map(|alias| {
+                let mut normalized = alias.clone();
+                normalized.make_ascii_lowercase();
+                mdream::consts::get_tag_id(&normalized).ok_or_else(|| {
+                  JsValue::from(js_sys::TypeError::new(&format!(
+                    "Unknown tag alias: {alias}"
+                  )))
+                })
+              })
+              .transpose()?;
+            let enter = as_string(&get_prop(&ov, "enter"));
+            let exit = as_string(&get_prop(&ov, "exit"));
+            let spacing = as_spacing(&get_prop(&ov, "spacing"))?;
+            let is_inline = as_bool(&get_prop(&ov, "isInline"));
+            let is_self_closing = as_bool(&get_prop(&ov, "isSelfClosing"));
+            let collapses_inner_white_space = as_bool(&get_prop(&ov, "collapsesInnerWhiteSpace"));
+            if alias_tag_id.is_some()
+              && (enter.is_some()
+                || exit.is_some()
+                || spacing.is_some()
+                || is_inline.is_some()
+                || is_self_closing.is_some()
+                || collapses_inner_white_space.is_some())
+            {
+              return Err(
+                js_sys::TypeError::new(&format!(
+                  "Tag override {tag_name:?} cannot combine alias with override fields"
+                ))
+                .into(),
+              );
+            }
+            let config = mdream::types::TagOverrideConfig {
+              enter,
+              exit,
+              spacing,
+              is_inline,
+              is_self_closing,
+              collapses_inner_white_space,
+              alias_tag_id,
+            };
+            Ok((tag_name, config))
+          })
+          .collect::<Result<Vec<_>, JsValue>>()
+      })
+      .transpose()?
   };
 
-  mdream::types::PluginConfig {
+  Ok(mdream::types::PluginConfig {
     filter,
     isolate_main,
     frontmatter,
     tailwind,
     extraction,
     tag_overrides,
-  }
+  })
 }
 
 // ── WASM exports ──
@@ -234,13 +275,15 @@ fn parse_plugins(p: &JsValue) -> mdream::types::PluginConfig {
 #[wasm_bindgen(js_name = "htmlToMarkdown")]
 pub fn html_to_markdown(html: &str, options: JsValue) -> Result<String, JsValue> {
   let (opts, format) = parse_options(&options)?;
-  Ok(mdream::html_to_format(html, opts, format))
+  mdream::try_html_to_format(html, opts, format)
+    .map_err(|error| js_sys::TypeError::new(&error.to_string()).into())
 }
 
 #[wasm_bindgen(js_name = "htmlToMarkdownResult")]
 pub fn html_to_markdown_result(html: &str, options: JsValue) -> Result<JsValue, JsValue> {
   let (opts, format) = parse_options(&options)?;
-  let result = mdream::html_to_format_result(html, opts, format);
+  let result = mdream::try_html_to_format_result(html, opts, format)
+    .map_err(|error| js_sys::TypeError::new(&error.to_string()))?;
 
   let obj = js_sys::Object::new();
   js_sys::Reflect::set(&obj, &"markdown".into(), &result.markdown.into()).unwrap_or_default();
@@ -285,7 +328,8 @@ impl MarkdownStream {
   pub fn new(options: JsValue) -> Result<Self, JsValue> {
     let (opts, format) = parse_options(&options)?;
     Ok(Self {
-      inner: mdream::MarkdownStreamProcessor::new_with_format(opts, format),
+      inner: mdream::MarkdownStreamProcessor::try_new_with_format(opts, format)
+        .map_err(|error| js_sys::TypeError::new(&error.to_string()))?,
     })
   }
 
