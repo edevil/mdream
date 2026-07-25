@@ -1214,7 +1214,9 @@ impl ConvertState {
     if value.is_empty() || value.len() > MAX_FRONTMATTER_VALUE_BYTES {
       return;
     }
-    let retained = self.frontmatter_retained_capacity();
+    let retained = self
+      .frontmatter_retained_capacity()
+      .saturating_sub(self.frontmatter_title.as_ref().map_or(0, String::capacity));
     let mut copy = String::new();
     if reserve_accounted(&mut copy, value.len(), retained, MAX_FRONTMATTER_BYTES).is_ok() {
       copy.push_str(value);
@@ -1231,7 +1233,9 @@ impl ConvertState {
       .iter()
       .position(|(existing, _)| existing == key)
     {
-      let retained = self.frontmatter_retained_capacity();
+      let retained = self
+        .frontmatter_retained_capacity()
+        .saturating_sub(self.frontmatter_meta[index].1.capacity());
       let mut copy = String::new();
       if reserve_accounted(&mut copy, value.len(), retained, MAX_FRONTMATTER_BYTES).is_ok() {
         copy.push_str(value);
@@ -1239,7 +1243,7 @@ impl ConvertState {
       }
       return;
     }
-    if self.frontmatter_meta.len() >= MAX_FRONTMATTER_FIELDS {
+    if self.frontmatter_meta.len() >= MAX_FRONTMATTER_FIELDS.saturating_sub(1) {
       return;
     }
 

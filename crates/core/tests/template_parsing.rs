@@ -83,7 +83,7 @@ fn inert_content_does_not_affect_isolate_main_or_frontmatter_state() {
       ..Default::default()
     },
   );
-  assert_eq!(result, "---\ntitle: Visible\n---\n\nVisible body");
+  assert_eq!(result, "---\ntitle: \"Visible\"\n---\n\nVisible body");
 }
 
 #[test]

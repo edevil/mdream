@@ -52,6 +52,7 @@ export interface TagOverride {
  * Frontmatter configuration options.
  */
 export interface FrontmatterConfig {
+  /** Extra fields; captured title and meta values take precedence on duplicate keys. */
   additionalFields?: Record<string, string>
   metaFields?: string[]
   /**

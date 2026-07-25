@@ -100,7 +100,7 @@ describe('template parsing', () => {
         frontmatter: true,
         isolateMain: true,
       },
-    })).toBe('---\ntitle: Visible\n---\n\nVisible body')
+    })).toBe('---\ntitle: "Visible"\n---\n\nVisible body')
   })
 
   it('matches whole-stream output at every chunk boundary', async () => {

@@ -2,6 +2,76 @@
 
 use super::*;
 
+fn yaml_double_quoted(value: &str) -> String {
+  const HEX: &[u8; 16] = b"0123456789ABCDEF";
+
+  let mut output = String::with_capacity(value.len().saturating_add(2));
+  output.push('"');
+  for character in value.chars() {
+    match character {
+      '"' => output.push_str("\\\""),
+      '\\' => output.push_str("\\\\"),
+      '\0'..='\u{1f}' => {
+        let byte = character as u8;
+        output.push_str("\\u00");
+        output.push(HEX[(byte >> 4) as usize] as char);
+        output.push(HEX[(byte & 0x0f) as usize] as char);
+      }
+      '\u{2028}' => output.push_str("\\u2028"),
+      '\u{2029}' => output.push_str("\\u2029"),
+      _ => output.push(character),
+    }
+  }
+  output.push('"');
+  output
+}
+
+fn selected_additional_fields<'a>(
+  additional: &'a [(String, String)],
+  metadata: &[(String, String)],
+  mut source_bytes: usize,
+  mut field_count: usize,
+) -> Vec<(&'a String, &'a String)> {
+  let mut candidates: Vec<(usize, &String, &String)> = Vec::new();
+  for (index, (key, value)) in additional.iter().enumerate() {
+    if matches!(key.as_str(), "title" | "description" | "meta")
+      || key.len() > MAX_FRONTMATTER_VALUE_BYTES
+      || value.len() > MAX_FRONTMATTER_VALUE_BYTES
+    {
+      continue;
+    }
+    if let Some(existing) = candidates
+      .iter_mut()
+      .find(|(_, existing_key, _)| *existing_key == key)
+    {
+      *existing = (index, key, value);
+      continue;
+    }
+    let position = candidates.partition_point(|(_, existing_key, _)| *existing_key < key);
+    if position < MAX_FRONTMATTER_FIELDS {
+      candidates.insert(position, (index, key, value));
+      if candidates.len() > MAX_FRONTMATTER_FIELDS {
+        candidates.pop();
+      }
+    }
+  }
+
+  let mut selected = Vec::new();
+  for (_, key, value) in candidates {
+    let field_bytes = key.len().saturating_add(value.len());
+    if metadata.iter().any(|(metadata_key, _)| metadata_key == key)
+      || field_count >= MAX_FRONTMATTER_FIELDS
+      || source_bytes.saturating_add(field_bytes) > MAX_FRONTMATTER_BYTES
+    {
+      continue;
+    }
+    field_count += 1;
+    source_bytes += field_bytes;
+    selected.push((key, value));
+  }
+  selected
+}
+
 impl ConvertState {
   pub(crate) fn generate_frontmatter_yaml(&mut self) {
     if self.plain_text {
@@ -14,60 +84,50 @@ impl ConvertState {
       .as_ref()
       .and_then(|p| p.frontmatter.as_ref());
 
-    let format_val = |val: &str| -> String {
-      let v = val.replace('"', "\\\"");
-      if v.contains('\n') || v.contains(':') || v.contains('#') || v.contains(' ') {
-        format!("\"{v}\"")
-      } else {
-        v
-      }
-    };
-
     let mut yaml_out = Vec::new();
     let mut source_bytes = 0usize;
     let mut field_count = 0usize;
     if let Some(t) = &self.frontmatter_title {
-      source_bytes = t.len();
+      source_bytes = "title".len().saturating_add(t.len());
       field_count = 1;
-      yaml_out.push(format!("title: {}", format_val(t)));
+      yaml_out.push(format!("title: {}", yaml_double_quoted(t)));
     }
 
-    if let Some(f) = f_opts
-      && let Some(add) = &f.additional_fields
-    {
-      let mut sorted: Vec<_> = add.iter().collect();
-      sorted.sort_by(|(a, _), (b, _)| a.cmp(b));
-      for (key, val) in sorted.into_iter().take(MAX_FRONTMATTER_FIELDS) {
-        if key != "title" && key != "description" {
-          let field_bytes = key.len().saturating_add(val.len());
-          if field_count >= MAX_FRONTMATTER_FIELDS
-            || key.len() > MAX_FRONTMATTER_VALUE_BYTES
-            || val.len() > MAX_FRONTMATTER_VALUE_BYTES
-            || source_bytes.saturating_add(field_bytes) > MAX_FRONTMATTER_BYTES
-          {
-            continue;
-          }
-          field_count += 1;
-          source_bytes += field_bytes;
-          yaml_out.push(format!("{}: {}", key, format_val(val)));
-        }
+    let mut meta_entries: Vec<_> = self.frontmatter_meta.iter().collect();
+    meta_entries.sort_by(|(a, _), (b, _)| a.cmp(b));
+    let mut accepted_meta = Vec::new();
+    for (key, val) in meta_entries {
+      let field_bytes = key.len().saturating_add(val.len());
+      if field_count >= MAX_FRONTMATTER_FIELDS
+        || source_bytes.saturating_add(field_bytes) > MAX_FRONTMATTER_BYTES
+      {
+        continue;
+      }
+      field_count += 1;
+      source_bytes += field_bytes;
+      accepted_meta.push((key, val));
+    }
+
+    if let Some(add) = f_opts.and_then(|f| f.additional_fields.as_ref()) {
+      for (key, val) in
+        selected_additional_fields(add, &self.frontmatter_meta, source_bytes, field_count)
+      {
+        yaml_out.push(format!(
+          "{}: {}",
+          yaml_double_quoted(key),
+          yaml_double_quoted(val)
+        ));
       }
     }
 
-    if !self.frontmatter_meta.is_empty() {
+    if !accepted_meta.is_empty() {
       yaml_out.push("meta:".to_string());
-      self.frontmatter_meta.sort_by(|(a, _), (b, _)| a.cmp(b));
-      for (key, val) in &self.frontmatter_meta {
-        if field_count >= MAX_FRONTMATTER_FIELDS {
-          break;
-        }
-        field_count += 1;
-        let k_fmt = if key.contains(':') {
-          format!("\"{key}\"")
-        } else {
-          key.clone()
-        };
-        yaml_out.push(format!("  {}: {}", k_fmt, format_val(val)));
+      for (key, val) in accepted_meta {
+        yaml_out.push(format!(
+          "  {}: {}",
+          yaml_double_quoted(key),
+          yaml_double_quoted(val)
+        ));
       }
     }
 
@@ -87,11 +147,18 @@ impl ConvertState {
     if let Some(title) = &self.frontmatter_title {
       entries.push(("title".to_string(), title.clone()));
     }
-    for (k, v) in self
-      .frontmatter_meta
+    let mut source_bytes = entries
       .iter()
-      .take(MAX_FRONTMATTER_FIELDS.saturating_sub(entries.len()))
-    {
+      .map(|(key, value)| key.len() + value.len())
+      .sum::<usize>();
+    for (k, v) in &self.frontmatter_meta {
+      let field_bytes = k.len().saturating_add(v.len());
+      if entries.len() >= MAX_FRONTMATTER_FIELDS
+        || source_bytes.saturating_add(field_bytes) > MAX_FRONTMATTER_BYTES
+      {
+        continue;
+      }
+      source_bytes += field_bytes;
       entries.push((k.clone(), v.clone()));
     }
     if let Some(add) = self
@@ -101,25 +168,10 @@ impl ConvertState {
       .and_then(|p| p.frontmatter.as_ref())
       .and_then(|f| f.additional_fields.as_ref())
     {
-      let mut source_bytes = entries
-        .iter()
-        .map(|(key, value)| key.len() + value.len())
-        .sum::<usize>();
-      for (k, v) in add
-        .iter()
-        .take(MAX_FRONTMATTER_FIELDS.saturating_sub(entries.len()))
+      for (k, v) in
+        selected_additional_fields(add, &self.frontmatter_meta, source_bytes, entries.len())
       {
-        if k != "title" && k != "description" {
-          let field_bytes = k.len().saturating_add(v.len());
-          if k.len() > MAX_FRONTMATTER_VALUE_BYTES
-            || v.len() > MAX_FRONTMATTER_VALUE_BYTES
-            || source_bytes.saturating_add(field_bytes) > MAX_FRONTMATTER_BYTES
-          {
-            continue;
-          }
-          source_bytes += field_bytes;
-          entries.push((k.clone(), v.clone()));
-        }
+        entries.push((k.clone(), v.clone()));
       }
     }
     Some(entries)

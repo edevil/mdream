@@ -8,7 +8,9 @@ use std::time::{Duration, Instant};
 
 use mdream::MarkdownStreamProcessor;
 use mdream::html_to_markdown;
-use mdream::types::{CleanConfig, HTMLToMarkdownOptions, PluginConfig, TagOverrideConfig};
+use mdream::types::{
+  CleanConfig, FrontmatterConfig, HTMLToMarkdownOptions, PluginConfig, TagOverrideConfig,
+};
 
 // ── Peak-allocation tracking allocator ──
 // Streaming must free already-yielded output; a criterion/time bench can't show
@@ -76,6 +78,40 @@ fn stream_chars(html: &str, max_bytes: usize, opts: HTMLToMarkdownOptions) -> St
   }
   out.push_str(&p.finish());
   out
+}
+
+#[test]
+fn frontmatter_commits_without_blocking_body_drain() {
+  let options = HTMLToMarkdownOptions {
+    plugins: Some(PluginConfig {
+      frontmatter: Some(FrontmatterConfig::default()),
+      ..Default::default()
+    }),
+    ..Default::default()
+  };
+  let head = "<head><title>Page</title><meta name=description content=Summary></head>";
+  let mut stream = MarkdownStreamProcessor::new(options.clone());
+  let first = stream.process_chunk(head);
+  assert_eq!(
+    first,
+    "---\ntitle: \"Page\"\nmeta:\n  \"description\": \"Summary\"\n---"
+  );
+
+  let mut output = first;
+  for index in 0..128 {
+    let chunk = stream.process_chunk(&format!("<p>body {index}</p>"));
+    assert!(!chunk.is_empty(), "body chunk {index} was retained");
+    output.push_str(&chunk);
+  }
+  output.push_str(&stream.finish());
+
+  let html = format!(
+    "{head}{}",
+    (0..128)
+      .map(|index| format!("<p>body {index}</p>"))
+      .collect::<String>()
+  );
+  assert_eq!(output, html_to_markdown(&html, options));
 }
 
 #[test]

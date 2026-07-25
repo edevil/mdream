@@ -210,7 +210,7 @@ describe.each(engines)('withMinimalPreset $name', (engineConfig) => {
 
     expect(markdown).toContain('---')
     expect(markdown).toContain('title: "Test Page"')
-    expect(markdown).toContain('description: "Test description"')
+    expect(markdown).toContain('"description": "Test description"')
     expect(markdown).toContain('Main Content')
   })
 

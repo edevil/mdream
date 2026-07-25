@@ -46,6 +46,7 @@
     "turndown-plugin-gfm": "catalog:bench",
     "typescript": "catalog:",
     "unified": "catalog:bench",
-    "vitest": "catalog:"
+    "vitest": "catalog:",
+    "yaml": "2.9.0"
   }
 }

@@ -292,8 +292,8 @@ pub struct TailwindConfig;
 /// Frontmatter plugin: emit YAML frontmatter extracted from `<head>` metadata.
 #[derive(Debug, Clone, Default)]
 pub struct FrontmatterConfig {
-  /// Extra key/value pairs appended to the frontmatter (reserved keys such
-  /// as `title` are silently ignored to avoid overwriting the page title).
+  /// Extra key/value pairs appended to the frontmatter. Captured title and
+  /// meta values take precedence on duplicate keys.
   pub additional_fields: Option<Vec<(String, String)>>,
   /// Additional `<meta name="...">` keys to extract beyond the defaults.
   pub meta_fields: Option<Vec<String>>,

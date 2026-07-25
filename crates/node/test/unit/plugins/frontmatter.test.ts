@@ -23,7 +23,7 @@ describe('frontmatter plugin', () => {
     expect(markdown).toContain('---')
     expect(markdown).toContain('title: "Test Page Title"')
     expect(markdown).toContain('meta:')
-    expect(markdown).toContain('  description: "This is a test page description"')
+    expect(markdown).toContain('  "description": "This is a test page description"')
     expect(markdown).toContain('---\n\n')
     expect(markdown).toContain('# Main Content')
     expect(markdown).toContain('This is the main content of the page.')
@@ -53,8 +53,8 @@ describe('frontmatter plugin', () => {
     })
 
     expect(markdown).toContain('title: "Test Page"')
-    expect(markdown).toContain('layout: post')
-    expect(markdown).toContain('date: 2025-05-10')
+    expect(markdown).toContain('"layout": "post"')
+    expect(markdown).toContain('"date": "2025-05-10"')
   })
 
   it('correctly formats frontmatter values', () => {
@@ -76,8 +76,8 @@ describe('frontmatter plugin', () => {
     })
 
     expect(markdown).toContain('title: "Title with \\"quotes\\""')
-    expect(markdown).toContain('keywords: "key1, key2, key3"')
-    expect(markdown).toContain('author: "John Doe"')
+    expect(markdown).toContain('"keywords": "key1, key2, key3"')
+    expect(markdown).toContain('"author": "John Doe"')
   })
 
   it('extracts social media meta tags', () => {
@@ -133,7 +133,7 @@ describe('frontmatter plugin', () => {
     })
 
     expect(markdown).toContain('meta:')
-    expect(markdown).toContain('  another-field: "Another Value"')
-    expect(markdown).toContain('  custom-field: "Custom Value"')
+    expect(markdown).toContain('  "another-field": "Another Value"')
+    expect(markdown).toContain('  "custom-field": "Custom Value"')
   })
 })

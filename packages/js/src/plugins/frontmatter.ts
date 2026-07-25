@@ -2,9 +2,10 @@ import type { ElementNode, TextNode } from '../types'
 import { ELEMENT_NODE, TAG_HEAD, TAG_META, TAG_TITLE } from '../const'
 import { createPlugin } from '../pluggable/plugin'
 
-const BACKSLASH_RE = /\\/g
-const DOUBLE_QUOTE_RE = /"/g
-const ESCAPED_DOUBLE_QUOTE_RE = /\\"/g
+const MAX_FRONTMATTER_FIELDS = 64
+const MAX_FRONTMATTER_VALUE_BYTES = 64 * 1024
+const MAX_FRONTMATTER_BYTES = 256 * 1024
+const UTF8_ENCODER = new TextEncoder()
 
 export interface FrontmatterPluginOptions {
   /** Additional frontmatter fields to include */
@@ -16,7 +17,54 @@ export interface FrontmatterPluginOptions {
 interface FrontmatterData {
   title?: string
   meta: Record<string, string>
-  [key: string]: string | Record<string, string> | undefined
+}
+
+function utf8Length(value: string): number {
+  return UTF8_ENCODER.encode(value).byteLength
+}
+
+function additionalCandidates(fields: Record<string, string> | undefined): Array<[string, string]> {
+  const candidates: Array<[string, string]> = []
+  if (!fields)
+    return candidates
+
+  for (const key in fields) {
+    if (!Object.hasOwn(fields, key))
+      continue
+    const value = fields[key]!
+    if (key === 'title' || key === 'description' || key === 'meta'
+      || utf8Length(key) > MAX_FRONTMATTER_VALUE_BYTES
+      || utf8Length(value) > MAX_FRONTMATTER_VALUE_BYTES) {
+      continue
+    }
+    const position = candidates.findIndex(([candidate]) => candidate >= key)
+    if (position === -1) {
+      if (candidates.length < MAX_FRONTMATTER_FIELDS)
+        candidates.push([key, value])
+    }
+    else if (position < MAX_FRONTMATTER_FIELDS) {
+      candidates.splice(position, 0, [key, value])
+      if (candidates.length > MAX_FRONTMATTER_FIELDS)
+        candidates.pop()
+    }
+  }
+  return candidates
+}
+
+function yamlDoubleQuoted(value: string): string {
+  let output = '"'
+  for (let index = 0; index < value.length; index++) {
+    const code = value.charCodeAt(index)
+    if (code === 0x22)
+      output += '\\"'
+    else if (code === 0x5C)
+      output += '\\\\'
+    else if (code <= 0x1F || code === 0x2028 || code === 0x2029 || (code >= 0xD800 && code <= 0xDFFF))
+      output += `\\u${code.toString(16).toUpperCase().padStart(4, '0')}`
+    else
+      output += value[index]
+  }
+  return `${output}"`
 }
 
 /**
@@ -24,7 +72,7 @@ interface FrontmatterData {
  * Extracts metadata from meta tags and title and generates YAML frontmatter
  */
 export function frontmatterPlugin(options: FrontmatterPluginOptions = {}) {
-  const additionalFields = options.additionalFields || {}
+  const additionalFields = additionalCandidates(options.additionalFields)
   const metaFields = new Set([
     'description',
     'keywords',
@@ -38,40 +86,54 @@ export function frontmatterPlugin(options: FrontmatterPluginOptions = {}) {
   ])
 
   // Metadata collection
-  const frontmatter: FrontmatterData = { ...additionalFields, meta: {} }
+  const frontmatter: FrontmatterData = { meta: Object.create(null) }
+  let retainedBytes = 0
+  let fieldCount = 0
+  let metadataCount = 0
   let inHead = false
 
-  function formatValue(_name: string, value: string) {
-    value = value.replace(BACKSLASH_RE, '\\\\').replace(DOUBLE_QUOTE_RE, '\\"')
-    if (value.includes('\n') || value.includes(':') || value.includes('#') || value.includes(' ')) {
-      return `"${value}"`
+  function setMetadata(target: Record<string, string>, key: string, value: string): void {
+    const keyBytes = utf8Length(key)
+    const valueBytes = utf8Length(value)
+    if (keyBytes > MAX_FRONTMATTER_VALUE_BYTES || valueBytes > MAX_FRONTMATTER_VALUE_BYTES)
+      return
+
+    const previous = target[key]
+    const previousBytes = previous === undefined ? 0 : keyBytes + utf8Length(previous)
+    const nextBytes = retainedBytes - previousBytes + keyBytes + valueBytes
+    if ((previous === undefined && metadataCount >= MAX_FRONTMATTER_FIELDS - 1) || nextBytes > MAX_FRONTMATTER_BYTES)
+      return
+
+    if (previous === undefined) {
+      fieldCount++
+      metadataCount++
     }
-    return value
+    retainedBytes = nextBytes
+    target[key] = value
+  }
+
+  function setTitle(value: string): void {
+    const valueBytes = utf8Length(value)
+    if (!value || valueBytes > MAX_FRONTMATTER_VALUE_BYTES)
+      return
+    const previousBytes = frontmatter.title === undefined ? 0 : 'title'.length + utf8Length(frontmatter.title)
+    const nextBytes = retainedBytes - previousBytes + 'title'.length + valueBytes
+    if ((frontmatter.title === undefined && fieldCount >= MAX_FRONTMATTER_FIELDS) || nextBytes > MAX_FRONTMATTER_BYTES)
+      return
+    if (frontmatter.title === undefined)
+      fieldCount++
+    retainedBytes = nextBytes
+    frontmatter.title = value
   }
 
   function getStructuredData(): Record<string, string> | undefined {
     const result: Record<string, string> = {}
-    if (frontmatter.title) {
-      // Strip quotes that formatValue adds
-      const raw = frontmatter.title
-      result.title = raw.startsWith('"') && raw.endsWith('"')
-        ? raw.slice(1, -1).replace(ESCAPED_DOUBLE_QUOTE_RE, '"')
-        : raw
-    }
+    for (const [key, value] of selectedAdditionalFields(retainedBytes, fieldCount))
+      result[key] = value
+    if (frontmatter.title)
+      result.title = frontmatter.title
     for (const [k, v] of Object.entries(frontmatter.meta)) {
-      // Strip wrapping quotes from key (e.g. '"og:title"' → 'og:title')
-      const cleanKey = k.startsWith('"') && k.endsWith('"') ? k.slice(1, -1) : k
-      // Strip wrapping quotes from value
-      const cleanVal = typeof v === 'string' && v.startsWith('"') && v.endsWith('"')
-        ? v.slice(1, -1).replace(ESCAPED_DOUBLE_QUOTE_RE, '"')
-        : String(v)
-      result[cleanKey] = cleanVal
-    }
-    if (additionalFields) {
-      for (const [k, v] of Object.entries(additionalFields)) {
-        if (typeof v === 'string')
-          result[k] = v
-      }
+      result[k] = v
     }
     return Object.keys(result).length > 0 ? result : undefined
   }
@@ -101,7 +163,7 @@ export function frontmatterPlugin(options: FrontmatterPluginOptions = {}) {
         // Check for valid meta tags
         const metaName = property || name
         if (metaName && content && metaFields.has(metaName)) {
-          frontmatter.meta[metaName.includes(':') ? `"${metaName}"` : metaName] = formatValue(metaName, content)
+          setMetadata(frontmatter.meta, metaName, content)
         }
 
         // Don't output anything for meta tags
@@ -120,7 +182,7 @@ export function frontmatterPlugin(options: FrontmatterPluginOptions = {}) {
           return undefined
 
         // Generate frontmatter as we exit the head
-        if (Object.keys(frontmatter).length > 0) {
+        if (fieldCount > 0 || additionalFields.length > 0) {
           const frontmatterContent = generateFrontmatter()
           if (frontmatterContent) {
             state.buffer.push(frontmatterContent)
@@ -144,7 +206,7 @@ export function frontmatterPlugin(options: FrontmatterPluginOptions = {}) {
       // Handle text inside title tag
       const parent = node.parent
       if (parent && parent.tagId === TAG_TITLE && node.value) {
-        frontmatter.title = formatValue('title', node.value.trim())
+        setTitle(node.value.trim())
         return { content: '', skip: true }
       }
     },
@@ -159,52 +221,47 @@ export function frontmatterPlugin(options: FrontmatterPluginOptions = {}) {
    * Generate YAML frontmatter string from collected metadata
    */
   function generateFrontmatter(): string {
-    if (Object.keys(frontmatter).length === 0) {
+    if (fieldCount === 0 && additionalFields.length === 0) {
       return ''
     }
 
-    // Process entries, handling 'meta' specially
-    let yamlLines: string[] = []
+    const yamlLines: string[] = []
+    if (frontmatter.title)
+      yamlLines.push(`title: ${yamlDoubleQuoted(frontmatter.title)}`)
 
-    // Sort frontmatter keys to put title and description first
-    const entries = Object.entries(frontmatter)
-      .sort(([a], [b]) => {
-        // Put 'title' first, then 'description', then the rest alphabetically
-        if (a === 'title')
-          return -1
-        if (b === 'title')
-          return 1
-        if (a === 'description')
-          return -1
-        if (b === 'description')
-          return 1
-        return a.localeCompare(b)
-      })
+    for (const [key, value] of selectedAdditionalFields(retainedBytes, fieldCount))
+      yamlLines.push(`${yamlDoubleQuoted(key)}: ${yamlDoubleQuoted(value)}`)
 
-    // Process each entry
-    for (const [key, value] of entries) {
-      if (key === 'meta' && typeof value === 'object' && value && Object.keys(value).length > 0) {
-        // Add meta key
-        yamlLines.push('meta:')
-
-        // Sort meta entries alphabetically and add with indentation
-        const metaEntries = Object.entries(value)
-          .sort(([a], [b]) => a.localeCompare(b))
-          .map(([metaKey, metaValue]) => `  ${metaKey}: ${metaValue}`)
-
-        yamlLines.push(...metaEntries)
-      }
-      else if (key !== 'meta' && typeof value === 'string') {
-        // Add regular keys
-        yamlLines.push(`${key}: ${value}`)
-      }
+    const metaEntries = Object.entries(frontmatter.meta).sort(([a], [b]) => a.localeCompare(b))
+    if (metaEntries.length > 0) {
+      yamlLines.push('meta:')
+      for (const [key, value] of metaEntries)
+        yamlLines.push(`  ${yamlDoubleQuoted(key)}: ${yamlDoubleQuoted(value)}`)
     }
 
-    // Remove meta if empty
-    if (Object.keys(frontmatter.meta).length === 0) {
-      yamlLines = yamlLines.filter(line => !line.startsWith('meta:'))
-    }
+    if (yamlLines.length === 0)
+      return ''
 
     return `---\n${yamlLines.join('\n')}\n---\n\n`
+  }
+
+  function selectedAdditionalFields(initialBytes: number, initialCount: number): Array<[string, string]> {
+    const selected: Array<[string, string]> = []
+    const capturedKeys = new Set(Object.keys(frontmatter.meta))
+    let bytes = initialBytes
+    let count = initialCount
+    for (const [key, value] of additionalFields) {
+      const keyBytes = utf8Length(key)
+      const valueBytes = utf8Length(value)
+      if (capturedKeys.has(key)
+        || count >= MAX_FRONTMATTER_FIELDS
+        || bytes + keyBytes + valueBytes > MAX_FRONTMATTER_BYTES) {
+        continue
+      }
+      selected.push([key, value])
+      bytes += keyBytes + valueBytes
+      count++
+    }
+    return selected
   }
 }
