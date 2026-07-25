@@ -1,0 +1,29 @@
+crates/Cargo.lock
+  s_f74c742e29a4b8::t_d553593ee22556 71-81,88-96,185-287,321-326,330-332,464-469,476-484,585-596,608-628,641-658,787-869
+crates/core/Cargo.toml
+  s_128f9b89fa8ad8::t_90da6dc6d53a8b 40-42
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "523e7d270f7b887fec926558663d425b0761e6dc",
+  "prompts": {},
+  "sessions": {
+    "s_128f9b89fa8ad8": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_0659e139affe8wbKn0WHXGrTXt",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "André Cruz <acruz@cloudflare.com>"
+    },
+    "s_f74c742e29a4b8": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_0659e1413ffephtpCuUrJm7g21",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "André Cruz <acruz@cloudflare.com>"
+    }
+  }
+}

@@ -1,0 +1,33 @@
+crates/core/src/convert/output.rs
+  s_f74c742e29a4b8::t_821503099d6d94 739,746,890,933-955,958,961,976-988,1055-1056,1060
+crates/core/src/types.rs
+  s_128f9b89fa8ad8::t_b0b0b7ed4ce4ef 614
+crates/core/src/url.rs
+  s_128f9b89fa8ad8::t_1f5304f5a3c84f 174-202
+packages/js/src/stream.ts
+  s_128f9b89fa8ad8::t_b8ee68d198864b 6-26,48-51,81,96
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "be80d563b24c23f34c4bdb0c757e7fcbd125a22b",
+  "prompts": {},
+  "sessions": {
+    "s_128f9b89fa8ad8": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_0659e139affe8wbKn0WHXGrTXt",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "André Cruz <acruz@cloudflare.com>"
+    },
+    "s_f74c742e29a4b8": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_0659e1413ffephtpCuUrJm7g21",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "André Cruz <acruz@cloudflare.com>"
+    }
+  }
+}
