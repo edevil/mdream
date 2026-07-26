@@ -1,0 +1,25 @@
+crates/core/src/convert/output.rs
+  s_8bdbb7bacec6d2::t_fca145211874a3 5-20,2452
+crates/core/tests/conversion.rs
+  s_8bdbb7bacec6d2::t_8069f67dffc011 592-596,601-603,617-619,621
+packages/js/src/utils.ts
+  s_8bdbb7bacec6d2::t_c6b7e862d28687 90-108,111,138
+packages/mdream/test/unit/nodes/pre-code-block.test.ts
+  s_8bdbb7bacec6d2::t_c86f443d25565b 41-45,50-52,54-56,58
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "84269209cd60a0460ca8397ed15bd618d550cc60",
+  "prompts": {},
+  "sessions": {
+    "s_8bdbb7bacec6d2": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_065252650ffe1dGZb9ZsDT3mU3",
+        "model": "claude-opus-5"
+      },
+      "human_author": "André Cruz <acruz@cloudflare.com>"
+    }
+  }
+}
