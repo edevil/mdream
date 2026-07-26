@@ -1,0 +1,27 @@
+packages/mdream/test/utils/markdown.ts
+  s_8bdbb7bacec6d2::t_82f48b2f95728f 1-14
+pnpm-lock.yaml
+  s_8bdbb7bacec6d2::t_4a80c9dc985ee9 24-26,263-265
+pnpm-workspace.yaml
+  s_8bdbb7bacec6d2::t_5a967da032861d 91
+packages/mdream/test/unit/nodes/pre-code-block.test.ts
+  s_8bdbb7bacec6d2::t_a0d6c2fcf4e56d 3-22,100-126
+package.json
+  s_8bdbb7bacec6d2::t_ef685cb8b581ed 43
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "9a1c1833ededd492c72fdef3ac19391067ae3b8e",
+  "prompts": {},
+  "sessions": {
+    "s_8bdbb7bacec6d2": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_065252650ffe1dGZb9ZsDT3mU3",
+        "model": "claude-opus-5"
+      },
+      "human_author": "André Cruz <acruz@cloudflare.com>"
+    }
+  }
+}
