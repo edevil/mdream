@@ -37,6 +37,15 @@ for f in pnpm-lock.yaml crates/Cargo.lock; do
     echo "   VERDICT       : content identical (any 'M' below is stat staleness only)"
   else
     echo "   VERDICT       : CONTENT DIVERGES"
+    echo "   -- diff stat:"
+    git --no-optional-locks diff --stat -- "$f" | sed 's/^/      /' || true
+    echo "   -- added lines: $(git --no-optional-locks diff -U0 -- "$f" | grep -c "^+" || true)"
+    echo "   -- removed lines: $(git --no-optional-locks diff -U0 -- "$f" | grep -c "^-" || true)"
+    echo "   -- added-line shapes, digits collapsed to N (top 25):"
+    git --no-optional-locks diff -U0 -- "$f" | sed -n "s/^+//p" \
+      | sed "s/[0-9][0-9.]*/N/g" | sort | uniq -c | sort -rn | head -25 | sed "s/^/      /" || true
+    echo "   -- first 60 diff lines:"
+    git --no-optional-locks diff -U1 -- "$f" | head -60 | sed 's/^/      /' || true
   fi
   if [ -f "$f" ]; then
     stat -c "   stat          : mtime=%y size=%s inode=%i" "$f" 2>/dev/null \
