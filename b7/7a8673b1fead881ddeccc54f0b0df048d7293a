@@ -1,0 +1,19 @@
+.github/pnpm-repro.sh
+  s_e88e94db3ee927::t_3ab045c2ea0db7 1-126
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "b77a8673b1fead881ddeccc54f0b0df048d7293a",
+  "prompts": {},
+  "sessions": {
+    "s_e88e94db3ee927": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_05d03381bffeyCkHYHJ4RvVKSz",
+        "model": "claude-opus-5"
+      },
+      "human_author": "André Cruz <acruz@cloudflare.com>"
+    }
+  }
+}
