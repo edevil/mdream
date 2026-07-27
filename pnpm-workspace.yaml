@@ -1,5 +1,16 @@
 shellEmulator: true
 
+# Self-management rewrites pnpm-lock.yaml as a side effect of unrelated
+# commands. Any pnpm invocation in a clean checkout - including the read-only
+# `pnpm store path` that actions/setup-node runs to locate the cache - prepends
+# a second YAML document recording `@pnpm/exe` and `pnpm` as
+# packageManagerDependencies, leaving the working tree dirty before any install
+# has run. That defeats `git checkout` of the base commit in the bundle-size
+# workflow, and means every CI install reads a lockfile that is not the one
+# committed. The pinned version is already supplied by pnpm/action-setup in CI
+# and by the packageManager field locally, so nothing needs to manage it here.
+managePackageManagerVersions: false
+
 trustPolicy: no-downgrade
 # These versions predate npm provenance/trusted-publishing, while their newer
 # releases publish with it, so no-downgrade flags them as trust downgrades.
