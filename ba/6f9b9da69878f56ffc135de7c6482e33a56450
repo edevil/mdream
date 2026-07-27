@@ -1,0 +1,19 @@
+pnpm-workspace.yaml
+  s_c1f54530f7e4b3::t_2847982bd58865 12
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "ba6f9b9da69878f56ffc135de7c6482e33a56450",
+  "prompts": {},
+  "sessions": {
+    "s_c1f54530f7e4b3": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_05d404d95ffeO11QMrGa0gTk2y",
+        "model": "claude-opus-5"
+      },
+      "human_author": "André Cruz <acruz@cloudflare.com>"
+    }
+  }
+}
