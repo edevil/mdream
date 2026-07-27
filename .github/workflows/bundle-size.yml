@@ -22,8 +22,14 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
+      - name: 'PROBE: after actions/checkout'
+        run: bash .github/probe-lockfile.sh 'after actions/checkout'
+
       - name: Install pnpm
         uses: pnpm/action-setup@078e9d416474b29c0c387560859308974f7e9c53 # v6.0.1
+
+      - name: 'PROBE: after pnpm-action-setup'
+        run: bash .github/probe-lockfile.sh 'after pnpm-action-setup'
 
       - name: Use Node.js 24.x
         uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
@@ -31,29 +37,41 @@ jobs:
           node-version: 24.x
           cache: pnpm
 
+      - name: 'PROBE: after setup-node cache-pnpm'
+        run: bash .github/probe-lockfile.sh 'after setup-node cache-pnpm'
+
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable
         with:
           toolchain: stable
           targets: wasm32-unknown-unknown
 
+      - name: 'PROBE: after rust-toolchain'
+        run: bash .github/probe-lockfile.sh 'after rust-toolchain'
+
       - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
         with:
           workspaces: crates -> target
+
+      - name: 'PROBE: after rust-cache'
+        run: bash .github/probe-lockfile.sh 'after rust-cache'
 
       - name: Install wasm-pack and wasm-opt
         uses: taiki-e/install-action@43aecc8d72668fbcfe75c31400bc4f890f1c5853 # v2.83.2
         with:
           tool: wasm-pack,wasm-opt
 
+      - name: 'PROBE: after install-action - immediately before base checkout'
+        run: bash .github/probe-lockfile.sh 'after install-action - immediately before base checkout'
+
       - name: Build base branch bundles
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
         run: |
           pr_sha=$(git rev-parse HEAD)
-          trap 'git checkout --detach "$pr_sha"' EXIT
+          trap 'git checkout --force --detach "$pr_sha"' EXIT
 
-          git checkout --detach "$BASE_SHA"
+          git checkout --force --detach "$BASE_SHA"
           rm -rf /tmp/base-dist
           mkdir -p /tmp/base-dist
 
@@ -70,7 +88,7 @@ jobs:
             echo "The base commit predates the bundle-size harness; bundles will be reported as new."
           fi
 
-          git checkout --detach "$pr_sha"
+          git checkout --force --detach "$pr_sha"
           trap - EXIT
 
       - name: Build pull request bundles
