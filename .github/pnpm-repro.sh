@@ -16,6 +16,24 @@ echo "pnpm version: $(pnpm --version 2>/dev/null)"
 echo "node version: $(node --version)"
 echo "PNPM_HOME   : ${PNPM_HOME:-<unset>}"
 echo "uname       : $(uname -sm)"
+echo "pnpm real   : $(readlink -f "$PNPM_BIN")"
+echo
+
+echo "================ effective pnpm config ================"
+pnpm config list 2>&1 | head -40
+echo
+echo "================ candidate config files ================"
+for f in /etc/npmrc /usr/etc/npmrc /usr/local/etc/npmrc "$HOME/.npmrc" \
+         "$HOME/.config/pnpm/rc" "${XDG_CONFIG_HOME:-$HOME/.config}/pnpm/rc" \
+         "$HOME/pnpm-workspace.yaml" "$HOME/package.json" \
+         "${RUNNER_TEMP:-/tmp}/../pnpm-workspace.yaml" "${RUNNER_TEMP:-/tmp}/../package.json"; do
+  [ -f "$f" ] && { echo "--- $f"; head -20 "$f"; }
+done
+echo "(end config files)"
+echo
+echo "================ pnpm/npm/corepack related env ================"
+env | sort | grep -iE '^(npm_|pnpm_|PNPM|COREPACK|NODE|NPM|CI=|GITHUB_ACTIONS)' | head -40
+echo "(end env)"
 echo
 
 # $1 dir, $2 pnpm-workspace.yaml contents (empty string = omit the file),
