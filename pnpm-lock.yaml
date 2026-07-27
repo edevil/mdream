@@ -21,6 +21,9 @@ catalogs:
     remark-gfm:
       specifier: ^4.0.1
       version: 4.0.1
+    remark-parse:
+      specifier: ^11.0.0
+      version: 11.0.0
     remark-stringify:
       specifier: ^11.0.0
       version: 11.0.0
@@ -257,6 +260,9 @@ importers:
       remark-gfm:
         specifier: catalog:bench
         version: 4.0.1(supports-color@10.2.2)
+      remark-parse:
+        specifier: catalog:bench
+        version: 11.0.0(supports-color@10.2.2)
       remark-stringify:
         specifier: catalog:bench
         version: 11.0.0
