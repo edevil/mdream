@@ -9,7 +9,7 @@ shellEmulator: true
 # workflow, and means every CI install reads a lockfile that is not the one
 # committed. The pinned version is already supplied by pnpm/action-setup in CI
 # and by the packageManager field locally, so nothing needs to manage it here.
-pmOnFail: ignore
+managePackageManagerVersions: false
 
 trustPolicy: no-downgrade
 # These versions predate npm provenance/trusted-publishing, while their newer
