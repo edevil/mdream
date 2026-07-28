@@ -1,0 +1,19 @@
+crates/core/tests/templates.rs
+  s_c1f54530f7e4b3::t_d175e97e108a54 155-187
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "a601391d622847de96d1dfc1bc2f119fd48acfc0",
+  "prompts": {},
+  "sessions": {
+    "s_c1f54530f7e4b3": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_05d404d95ffeO11QMrGa0gTk2y",
+        "model": "claude-opus-5"
+      },
+      "human_author": "André Cruz <acruz@cloudflare.com>"
+    }
+  }
+}
