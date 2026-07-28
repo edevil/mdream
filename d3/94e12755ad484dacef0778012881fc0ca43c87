@@ -1,0 +1,19 @@
+README.md
+  s_c1f54530f7e4b3::t_d3e578a8cda043 1,3-18
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "d394e12755ad484dacef0778012881fc0ca43c87",
+  "prompts": {},
+  "sessions": {
+    "s_c1f54530f7e4b3": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_05d404d95ffeO11QMrGa0gTk2y",
+        "model": "claude-opus-5"
+      },
+      "human_author": "André Cruz <acruz@cloudflare.com>"
+    }
+  }
+}
