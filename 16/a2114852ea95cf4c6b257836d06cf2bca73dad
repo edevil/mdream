@@ -1,0 +1,32 @@
+packages/js/src/utils.ts
+  s_c1f54530f7e4b3::t_1f041cb3f7c0cb 24
+  s_c1f54530f7e4b3::t_aa1c38478798be 18,20
+  s_c1f54530f7e4b3::t_52d9875b639595 42,46-47,51,54,56
+  s_c1f54530f7e4b3::t_a77b6ea986a031 13-17,19,21-23,26-27,29,32-39,41,43-45,52-53,55,57
+  s_c1f54530f7e4b3::t_275f181f4fc911 50
+  s_c1f54530f7e4b3::t_7dbf877430dfd2 10-12
+  s_c1f54530f7e4b3::t_7e6632d0fcbf55 49
+packages/mdream/test/unit/plugins/strip-broken-fragments.test.ts
+  s_c1f54530f7e4b3::t_0356fde16ae040 152-204
+crates/core/src/url.rs
+  s_c1f54530f7e4b3::t_ee36c3d959c1b5 57-58,63-67,69-73
+  s_c1f54530f7e4b3::t_06e3fb80981d3c 299-362
+  s_c1f54530f7e4b3::t_3d6eafbe5bd863 27-56,59-62,68,74-75
+  s_c1f54530f7e4b3::t_032dc6feb214fe 296-298
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "16a2114852ea95cf4c6b257836d06cf2bca73dad",
+  "prompts": {},
+  "sessions": {
+    "s_c1f54530f7e4b3": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_05d404d95ffeO11QMrGa0gTk2y",
+        "model": "claude-opus-5"
+      },
+      "human_author": null
+    }
+  }
+}
