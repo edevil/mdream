@@ -1,0 +1,25 @@
+crates/core/tests/conversion.rs
+  s_c1f54530f7e4b3::t_921f5c56d4a5e9 889-902,911-912
+  s_c1f54530f7e4b3::t_60285374abf68d 903-910
+crates/core/tests/streaming_drain.rs
+  s_c1f54530f7e4b3::t_aab3aebff9a678 222,225-227
+  s_c1f54530f7e4b3::t_1c8bd8cebec897 209-221,223-224,228-241
+crates/core/src/convert/output.rs
+  s_c1f54530f7e4b3::t_bbb01392d44aa8 537-543
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "507711cffbdc1725fec3586573d3a19414146f3a",
+  "prompts": {},
+  "sessions": {
+    "s_c1f54530f7e4b3": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_05d404d95ffeO11QMrGa0gTk2y",
+        "model": "claude-opus-5"
+      },
+      "human_author": null
+    }
+  }
+}
