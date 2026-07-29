@@ -1,0 +1,38 @@
+crates/core/tests/streaming_drain.rs
+  s_9e97f0933ce7bd::t_550b12a367dc5e 801-827
+crates/core/src/convert/output.rs
+  s_c1f54530f7e4b3::t_622e17434f4c25 2548-2561
+  s_c1f54530f7e4b3::t_0ec82b260021b1 2520,2563-2578
+  s_c1f54530f7e4b3::t_47619a78883ea2 2204
+  s_9e97f0933ce7bd::t_3b5925fe700f8e 2517-2519,2521,2523-2524,2528-2529,2581-2582,2584
+  s_c1f54530f7e4b3::t_31cede60f2fdf3 1545-1553,2522,2533,2547,2562,2579
+  s_c1f54530f7e4b3::t_1eff4d6117d797 1542-1544
+  s_c1f54530f7e4b3::t_335bf07b2e4efb 2525-2527,2580
+  s_c1f54530f7e4b3::t_46c937044d2b48 1053
+  s_c1f54530f7e4b3::t_786ea7b85b214f 2530-2532
+  s_c1f54530f7e4b3::t_ab5f9d5e42544e 2534-2546,2583
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "c03b73622a639b67ec63736d1b9120f60761a1a2",
+  "prompts": {},
+  "sessions": {
+    "s_9e97f0933ce7bd": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_0ddd325b9ffeJvRMe8GEyQItkc",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "André Cruz <acruz@cloudflare.com>"
+    },
+    "s_c1f54530f7e4b3": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_05d404d95ffeO11QMrGa0gTk2y",
+        "model": "claude-opus-5"
+      },
+      "human_author": null
+    }
+  }
+}
