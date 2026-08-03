@@ -1,0 +1,24 @@
+crates/core/src/convert/output.rs
+  s_f9b14b8041794a::t_5944f5874d16c4 583,1946-1955,1959,1962
+  s_f9b14b8041794a::t_d8337e573e1390 580-582
+  s_f9b14b8041794a::t_e31d56ff0f39ed 584-586
+  s_f9b14b8041794a::t_03ff44bdadbb05 1956-1958
+  s_f9b14b8041794a::t_377c8cc8b8e216 1960-1961
+  s_f9b14b8041794a::t_2341bb8a58679f 1963-1965
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "ec5c7ad8835d56d86661c824971eab790f849280",
+  "prompts": {},
+  "sessions": {
+    "s_f9b14b8041794a": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_038bf361affeP2y3nlHScMaimD",
+        "model": "claude-opus-5"
+      },
+      "human_author": "André Cruz <acruz@cloudflare.com>"
+    }
+  }
+}
