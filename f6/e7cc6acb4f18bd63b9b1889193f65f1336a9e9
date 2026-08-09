@@ -1,0 +1,30 @@
+crates/core/fuzz/.gitignore
+  s_21c934b2d12626::t_87b43a90444510 6
+crates/core/tests/streaming_drain.rs
+  s_21c934b2d12626::t_404d12cb9c85fd 1232-1239
+  s_21c934b2d12626::t_6db5fe60804bad 1222-1231,1240-1242
+crates/core/src/convert/mod.rs
+  s_21c934b2d12626::t_ef63adb5db4b02 1554-1563
+  s_21c934b2d12626::t_8e0f5cfc3ed5ff 1363
+  s_21c934b2d12626::t_aaf0e58296d91c 1327-1331
+  s_21c934b2d12626::t_104879061c1cd8 1335,1342,1349
+  s_21c934b2d12626::t_f2e8e75c4f8059 1564-1565
+crates/core/fuzz/corpus/fuzz_streaming_chunks/stale-yield-offset-multibyte
+  s_21c934b2d12626::t_b1371b22ed4345 1
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "f6e7cc6acb4f18bd63b9b1889193f65f1336a9e9",
+  "prompts": {},
+  "sessions": {
+    "s_21c934b2d12626": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_01979eac4ffecCDGlL4ePOuSWr",
+        "model": "claude-opus-5"
+      },
+      "human_author": "André Cruz <acruz@cloudflare.com>"
+    }
+  }
+}
