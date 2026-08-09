@@ -1,0 +1,22 @@
+crates/core/src/convert/mod.rs
+  s_21c934b2d12626::t_a5d7e83a393392 1332-1334
+  s_21c934b2d12626::t_027829113f46af 1335
+crates/core/fuzz/Cargo.lock
+  s_21c934b2d12626::t_c710f8aedb180e 88
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "dae667d77adda8e9b0b6bb2e636ecb6eb9bf5585",
+  "prompts": {},
+  "sessions": {
+    "s_21c934b2d12626": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_01979eac4ffecCDGlL4ePOuSWr",
+        "model": "claude-opus-5"
+      },
+      "human_author": "André Cruz <acruz@cloudflare.com>"
+    }
+  }
+}
