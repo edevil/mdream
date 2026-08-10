@@ -1,0 +1,21 @@
+crates/core/src/convert/mod.rs
+  s_21c934b2d12626::t_b2e4033a6263d6 1527-1544
+crates/core/tests/streaming_drain.rs
+  s_21c934b2d12626::t_e18cc692c3f0c7 1274-1279
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "1bf6014e7dab33a074773fa9c79d07fb2fe3b95e",
+  "prompts": {},
+  "sessions": {
+    "s_21c934b2d12626": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_01979eac4ffecCDGlL4ePOuSWr",
+        "model": "claude-opus-5"
+      },
+      "human_author": null
+    }
+  }
+}
