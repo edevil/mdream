@@ -1,0 +1,27 @@
+crates/core/fuzz/fuzz_targets/fuzz_streaming.rs
+  s_21c934b2d12626::t_3b17d3a9f6ce1b 4,6-10,19,21,23-31
+crates/core/fuzz/fuzz_targets/fuzz_streaming_widths.rs
+  s_21c934b2d12626::t_78e2cf95cbc94a 1-40
+crates/core/fuzz/Cargo.toml
+  s_21c934b2d12626::t_35534ba20ac154 67-73
+crates/core/fuzz/fuzz_targets/fuzz_streaming_options.rs
+  s_21c934b2d12626::t_e9510907549622 55,67,72,79,82-88,90-100
+crates/core/fuzz/fuzz_targets/fuzz_html_grammar.rs
+  s_21c934b2d12626::t_0d0a15945cc329 231,242,246,253,256-261,263-272
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "909a051f7344d27b2e9e5ab3e0b69331f667eee8",
+  "prompts": {},
+  "sessions": {
+    "s_21c934b2d12626": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_01979eac4ffecCDGlL4ePOuSWr",
+        "model": "claude-opus-5"
+      },
+      "human_author": null
+    }
+  }
+}
