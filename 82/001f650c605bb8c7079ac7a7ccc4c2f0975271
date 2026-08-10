@@ -1,0 +1,31 @@
+crates/core/tests/streaming_drain.rs
+  s_21c934b2d12626::t_e18cc692c3f0c7 1334-1339
+  s_21c934b2d12626::t_c5a635c5317a3c 8-10,725-733,735-751
+  s_21c934b2d12626::t_59edd435b6a42f 1322-1333
+  s_21c934b2d12626::t_becec107e69d04 752-759,766-770
+crates/core/src/convert/mod.rs
+  s_21c934b2d12626::t_89e33e60e6e83d 1597-1598,1600-1604,1610
+  s_21c934b2d12626::t_88a9294bd1b103 148-149,153-158,164-166,1519,1548-1574,1576,1586-1596
+  s_21c934b2d12626::t_e8b36e2b932686 1390-1395,1397-1402
+crates/core/src/convert/output.rs
+  s_21c934b2d12626::t_e5125bb7f9077b 1960-1972,1977,3063,3128
+  s_21c934b2d12626::t_a6bb8f73763cba 1670-1690
+crates/core/tests/conversion.rs
+  s_21c934b2d12626::t_ce7ab3c25b5507 4029-4062
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "82001f650c605bb8c7079ac7a7ccc4c2f0975271",
+  "prompts": {},
+  "sessions": {
+    "s_21c934b2d12626": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_01979eac4ffecCDGlL4ePOuSWr",
+        "model": "claude-opus-5"
+      },
+      "human_author": null
+    }
+  }
+}
