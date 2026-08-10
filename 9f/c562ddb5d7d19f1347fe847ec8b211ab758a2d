@@ -1,0 +1,21 @@
+crates/core/src/convert/output.rs
+  s_21c934b2d12626::t_830276b2be19a4 1668-1679,1700-1702
+crates/core/tests/streaming_drain.rs
+  s_21c934b2d12626::t_4581587bbb0de8 1551-1560
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "9fc562ddb5d7d19f1347fe847ec8b211ab758a2d",
+  "prompts": {},
+  "sessions": {
+    "s_21c934b2d12626": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_01979eac4ffecCDGlL4ePOuSWr",
+        "model": "claude-opus-5"
+      },
+      "human_author": "André Cruz <acruz@cloudflare.com>"
+    }
+  }
+}
