@@ -1,0 +1,24 @@
+crates/core/src/convert/output.rs
+  s_21c934b2d12626::t_4f530e1f25547e 308-337
+crates/core/tests/conversion.rs
+  s_21c934b2d12626::t_cc9c38a0b433e8 4123-4155
+crates/core/src/convert/mod.rs
+  s_21c934b2d12626::t_ac3227cb82278a 1592-1600
+  s_21c934b2d12626::t_d225ae6d6d61aa 1590
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "ddb354d85980b9fc7ed022fd9271bc332239e55b",
+  "prompts": {},
+  "sessions": {
+    "s_21c934b2d12626": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_01979eac4ffecCDGlL4ePOuSWr",
+        "model": "claude-opus-5"
+      },
+      "human_author": "André Cruz <acruz@cloudflare.com>"
+    }
+  }
+}
