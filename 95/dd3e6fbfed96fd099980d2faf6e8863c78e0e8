@@ -1,0 +1,84 @@
+crates/core/src/convert/mod.rs
+  s_21c934b2d12626::t_027829113f46af 1393,1396
+  s_21c934b2d12626::t_17bfe2a0fad606 1394-1396
+  s_21c934b2d12626::t_a5d7e83a393392 1393,1393-1395,1393-1396
+  s_21c934b2d12626::t_76ce7677399988 1394-1396
+  s_edafcf774d763a::t_b814248ed0c69c 1367-1371
+  s_21c934b2d12626::t_62712357a13376 1367-1371
+  s_21c934b2d12626::t_ba32a17a964e21 1501-1504,1508
+  s_21c934b2d12626::t_a0aa60c469dcee 1645-1646,1648-1652,1658
+  s_21c934b2d12626::t_89e33e60e6e83d 1645-1646,1648-1652,1658
+  s_21c934b2d12626::t_88a9294bd1b103 153-154,158-163,169-171,1567,1596-1644,1596-1622,1624,1634-1644
+  s_21c934b2d12626::t_e8b36e2b932686 1438-1443,1445-1450
+  s_21c934b2d12626::t_ac3227cb82278a 1625-1633
+  s_21c934b2d12626::t_d225ae6d6d61aa 1623
+  s_21c934b2d12626::t_0886730917d6a7 961-963
+  s_21c934b2d12626::t_4b2daba40b219d 1305-1307,1319-1323,1325-1327,1338-1339,1345
+crates/core/tests/streaming_drain.rs
+  s_21c934b2d12626::t_fd15c2522d8bd6 1301-1311
+  s_21c934b2d12626::t_f262efbaa640e0 1301-1311
+  s_edafcf774d763a::t_4ba8c8edb593b7 1312-1317,1325-1328
+  s_21c934b2d12626::t_ca998b9731557d 1301-1317,1325-1328
+  s_21c934b2d12626::t_198bc0ac1f5eb9 1329-1348
+  s_21c934b2d12626::t_e18cc692c3f0c7 1362-1367
+  s_21c934b2d12626::t_becec107e69d04 748-750,780-787,794-798
+  s_21c934b2d12626::t_c5a635c5317a3c 8-11,8-10,725-747,725-733,735-751
+  s_21c934b2d12626::t_d677c9230d5914 751
+  s_21c934b2d12626::t_59edd435b6a42f 1350-1361
+  s_21c934b2d12626::t_c09e650fe12a6a 780-798
+  s_edafcf774d763a::t_c78d3e43cf8755 1392,1397-1444
+  s_21c934b2d12626::t_f18079c02e8cf4 1393-1396
+  s_21c934b2d12626::t_dce10cbe3395e5 1445-1483
+  s_21c934b2d12626::t_df91a8384d6467 752-779
+  s_21c934b2d12626::t_9aec454bb8fde5 1484-1520
+  s_21c934b2d12626::t_bd4c6e124244eb 1521-1542
+crates/core/src/lib.rs
+  s_21c934b2d12626::t_420834b9112abc 165-168
+crates/core/src/convert/output.rs
+  s_21c934b2d12626::t_a49a3762259bc1 704-707,711
+  s_21c934b2d12626::t_e5125bb7f9077b 2070-2082,2087,3177,3242
+  s_21c934b2d12626::t_a6bb8f73763cba 1755-1775
+  s_21c934b2d12626::t_4f530e1f25547e 308-325,329-332,346-347
+  s_edafcf774d763a::t_649066eaa3e1bb 2994
+  s_21c934b2d12626::t_6e8864c5d46f96 2992-2993
+  s_21c934b2d12626::t_bd864e0e253ff6 2000-2006
+  s_21c934b2d12626::t_c0a62d3b27fd8b 375-382
+crates/core/tests/conversion.rs
+  s_21c934b2d12626::t_ce7ab3c25b5507 4105-4138
+  s_21c934b2d12626::t_cc9c38a0b433e8 4139-4171
+  s_21c934b2d12626::t_b321a527ac4d54 4172-4188,4192-4222
+crates/core/fuzz/fuzz_targets/fuzz_streaming.rs
+  s_21c934b2d12626::t_3b17d3a9f6ce1b 4,6-10,19,21,23-31
+crates/core/fuzz/fuzz_targets/fuzz_streaming_widths.rs
+  s_21c934b2d12626::t_78e2cf95cbc94a 1-40
+crates/core/fuzz/Cargo.toml
+  s_21c934b2d12626::t_35534ba20ac154 67-73
+crates/core/fuzz/fuzz_targets/fuzz_streaming_options.rs
+  s_21c934b2d12626::t_e9510907549622 55,67,72,79,82-88,90-100
+crates/core/fuzz/fuzz_targets/fuzz_html_grammar.rs
+  s_21c934b2d12626::t_0d0a15945cc329 231,242,246,253,256-261,263-272
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "95dd3e6fbfed96fd099980d2faf6e8863c78e0e8",
+  "prompts": {},
+  "sessions": {
+    "s_21c934b2d12626": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_01979eac4ffecCDGlL4ePOuSWr",
+        "model": "claude-opus-5"
+      },
+      "human_author": "André Cruz <acruz@cloudflare.com>"
+    },
+    "s_edafcf774d763a": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_0294a6f25ffePGc7rhDG7r065R",
+        "model": "claude-opus-5"
+      },
+      "human_author": "André Cruz <acruz@cloudflare.com>"
+    }
+  }
+}
