@@ -1,0 +1,35 @@
+crates/core/src/convert/mod.rs
+  s_8ef5fc6ccf1437::t_6ede10cbca28db 952-961,984
+  s_8ef5fc6ccf1437::t_6e157708902fda 854-869
+  s_8ef5fc6ccf1437::t_48199981dec279 968-970,979-983
+  s_8ef5fc6ccf1437::t_57cd127089e281 417-422
+  s_8ef5fc6ccf1437::t_82178b5cb3f3d5 1026-1030
+  s_8ef5fc6ccf1437::t_c9757a747e282c 63-68
+  s_8ef5fc6ccf1437::t_7ff15945ca2740 847-849,852-853,872-879
+  s_8ef5fc6ccf1437::t_369fa4f4dcefb0 963-965
+  s_8ef5fc6ccf1437::t_f7cefda6f3c0a9 971-978
+  s_8ef5fc6ccf1437::t_ccf35f0e8beed2 69-73,79-83,91-96
+  s_8ef5fc6ccf1437::t_09abd766c64f19 74-78,90
+  s_8ef5fc6ccf1437::t_5f48e1580a9345 850-851,870-871
+  s_8ef5fc6ccf1437::t_750058c08e89c6 84-89,626,945,962,966-967
+crates/core/tests/streaming_drain.rs
+  s_8ef5fc6ccf1437::t_8adb6ffed7caeb 557-661
+crates/core/src/convert/parse.rs
+  s_8ef5fc6ccf1437::t_13a50bae9f107f 444
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "20690c734f706e8acf3b2d30b2fd0b69b838b47b",
+  "prompts": {},
+  "sessions": {
+    "s_8ef5fc6ccf1437": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_00f9c1048ffePAiVHCkQFydPG5",
+        "model": "claude-opus-5"
+      },
+      "human_author": "André Cruz <acruz@cloudflare.com>"
+    }
+  }
+}
