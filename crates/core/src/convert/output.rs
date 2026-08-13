@@ -646,6 +646,13 @@ impl ConvertState {
             && is_empty_link_href(href)
           {
             self.skip_current_link = true;
+            // This returns before the bracket bookkeeping below, leaving
+            // `link_bracket_pos` pointing at the *previous* link. Keep the hold
+            // (matching the pre-release behaviour for a link with no `[`) and
+            // clear any release the previous link had earned, or its stale flag
+            // would send this one's exit down the wrong path.
+            self.link_hold_forever = true;
+            self.link_hold_released = false;
             self.last_node_is_inline = is_inline;
             return;
           }
@@ -765,14 +772,34 @@ impl ConvertState {
       // last byte alone also matches the `[` of an escaped literal `\[` in the
       // text before the link, and the empty-link drop then truncates into that
       // text instead of the link it meant to remove.
-      self.link_bracket_pos = if output
+      let emitted_bracket = output
         .as_deref()
-        .is_some_and(|o| o.as_bytes().last() == Some(&b'['))
-      {
+        .is_some_and(|o| o.as_bytes().last() == Some(&b'['));
+      self.link_bracket_pos = if emitted_bracket {
         buf_len - 1
       } else {
         buf_len
       };
+      // Only streaming holds bytes back, so only streaming needs to work out
+      // whether this link may release. The `href` lookup is a string-keyed one,
+      // and it is measurable on a link-dense page, so one-shot skips all of it.
+      if self.streaming {
+        self.link_hold_released = false;
+        // A link with no `[` has no anchor to reason about, and one whose close
+        // rewrites unconditionally can never let its text go; see
+        // `link_hold_required`.
+        let href = self.stack[stack_len - 1].attributes.get("href");
+        self.link_url_max_len = href.map_or(0, |href| {
+          6 + self.options.origin.as_deref().map_or(0, str::len) + 1 + href.len()
+        });
+        self.link_hold_forever = !emitted_bracket
+          || href.is_some_and(|href| {
+            href.starts_with('#')
+              && ((self.clean_flags & CLEAN_FRAGMENTS != 0 && href.len() > 1)
+                || (self.clean_flags & CLEAN_SELF_LINK_HEADINGS != 0
+                  && (TAG_H1..=TAG_H6).any(|h| self.depth_map[h as usize] > 0)))
+          });
+      }
     }
 
     if !enter_is_literal
@@ -944,16 +971,33 @@ impl ConvertState {
       new_line_config[1]
     };
 
+    // emptyLinks: skip exit for skipped links. Kept ahead of the rewrites below
+    // because it must run even for a link whose `[` was released.
+    if !self.plain_text
+      && self.clean_flags != 0
+      && tag_id == Some(TAG_A)
+      && !has_override
+      && self.skip_current_link
+    {
+      self.skip_current_link = false;
+      self.last_node_is_inline = is_inline;
+      return;
+    }
+
     // Clean mode exit — single guard. Skipped for overridden anchors,
     // whose custom exit output isn't the default `[…](…)` shape.
-    if !self.plain_text && self.clean_flags != 0 && tag_id == Some(TAG_A) && !has_override {
-      // emptyLinks: skip exit for skipped links
-      if self.skip_current_link {
-        self.skip_current_link = false;
-        self.last_node_is_inline = is_inline;
-        return;
-      }
-
+    //
+    // Also skipped once the `[` has been yielded or drained: every rewrite here
+    // is anchored to it, `link_hold_required` has already proved none of them
+    // can apply, and the rescan below would not find the bracket anyway. Falling
+    // through leaves the ordinary close to write `](url)` — returning here on the
+    // missing bracket instead would silently drop the link's target.
+    if !self.plain_text
+      && self.clean_flags != 0
+      && tag_id == Some(TAG_A)
+      && !has_override
+      && !self.link_hold_released
+    {
       // Find actual [ position: scan from recorded pos (write_output may have inserted newlines before it)
       let buf_len = self.buffer.len();
       let bracket_pos = {
@@ -1101,7 +1145,15 @@ impl ConvertState {
         // directly at the `[` byte (set in emit_enter_element), so this
         // is an O(1) check. `[` is single-byte UTF-8, so `bp + 1` is
         // always a char boundary once `buf_bytes[bp]` is confirmed `[`.
-        if title.is_empty() && is_autolink_uri(resolved) {
+        // Not once released, because the position has been rebased to 0 and the
+        // byte there may be a `[` belonging to earlier output, which would send
+        // the truncate below into it.
+        //
+        // Belt and braces: a link that could autolink has text *equal* to its
+        // URL, and releasing needs text strictly longer, so a released link never
+        // reaches here in the first place. Neither the suite nor the 239k-file
+        // corpus can reach it; it guards the stale read, not a live rewrite.
+        if title.is_empty() && is_autolink_uri(resolved) && !self.link_hold_released {
           let bp = self.link_bracket_pos;
           let buf_bytes = self.buffer.as_bytes();
           if bp < buf_bytes.len() && buf_bytes[bp] == b'[' && &self.buffer[bp + 1..] == resolved {
@@ -1768,13 +1820,20 @@ impl ConvertState {
     // element closes empty, so neither is content the item can be decided on —
     // only its exit is. It must open exactly at the item's content start;
     // anything earlier is content that already settles the question.
+    //
+    // A released `[` is not pending any more, and its recorded position has been
+    // rebased to 0, so it must not be consulted. As with the autolink shorthand
+    // this guards the stale read: releasing needs enough text to have been
+    // yielded, which is itself content that settles the item.
     let opens_the_item = |position: usize| position == end;
     if !at_exit
       && (self
         .open_markers
         .first()
         .is_some_and(|&(_, position, _)| opens_the_item(position))
-        || (self.depth_map[TAG_A as usize] > 0 && opens_the_item(self.link_bracket_pos)))
+        || (self.depth_map[TAG_A as usize] > 0
+          && !self.link_hold_released
+          && opens_the_item(self.link_bracket_pos)))
     {
       return;
     }

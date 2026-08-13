@@ -1852,3 +1852,132 @@ fn streaming_does_not_invent_a_newline_behind_a_single_byte_cut() {
     assert_eq!(actual, expected, "chunk={chunk}");
   }
 }
+
+// A link wrapping a large region held the buffer from its `[` to its `</a>`,
+// because the close can rewrite back to that bracket. The rewrites all need link
+// text no longer than the URL, so once the text outgrows it the bracket is
+// released; see `link_hold_required`.
+#[test]
+fn streaming_memory_is_bounded_for_a_link_wrapping_the_document() {
+  const TARGET: usize = 2 * 1024 * 1024;
+  let html = one_long_text_run("<a href=\"/x\">", "</a>", TARGET);
+
+  let (peak, total_out) = measure_peak(&html, 8 * 1024, HTMLToMarkdownOptions::default());
+
+  assert!(
+    total_out > TARGET as u64 - 4096,
+    "expected the whole link text in the output, got {total_out}"
+  );
+  // Measures ~359KB, against the ~4.6MB it held before.
+  assert!(
+    peak < TARGET as u64,
+    "peak {peak} should be a window, not the {} byte link",
+    html.len()
+  );
+}
+
+// Releasing the bracket must not cost the link its target. The close rescans for
+// the `[` to decide its rewrites, and used to give up when it could not find one,
+// which silently dropped the `](url)` of every long link.
+// Clean mode matters here and not elsewhere: the rescan that gave up sits inside
+// the clean-mode exit, so a default-options fixture cannot reach the bug.
+#[test]
+fn a_released_link_still_writes_its_target() {
+  // Past the text-run flush threshold: at exactly one threshold the run never
+  // splits, so nothing is yielded and the link never releases.
+  let html = one_long_text_run("<p><a href=\"/examples/\">", "</a></p>", 256 * 1024);
+  for clean in [false, true] {
+    let opts = if clean {
+      HTMLToMarkdownOptions::default().with_clean(safe_clean())
+    } else {
+      HTMLToMarkdownOptions::default()
+    };
+    let expected = html_to_markdown(&html, opts.clone());
+    assert!(
+      expected.trim_end().ends_with("](/examples/)"),
+      "clean={clean} fixture should produce a closed link, got tail {:?}",
+      &expected[expected.len() - 32..]
+    );
+    for chunk in [8192, 997, 64] {
+      assert_eq!(
+        stream_chunks(&html, chunk, opts.clone()),
+        expected,
+        "clean={clean} chunk={chunk}"
+      );
+    }
+  }
+}
+
+// Every rewrite anchored to the `[` must still fire when the text is long enough
+// to tempt a release. `link_hold_forever` keeps the unconditional ones held, and
+// the length test keeps the equality ones held; this pins both.
+#[test]
+fn long_links_still_get_every_bracket_anchored_rewrite() {
+  // A long URL so the equality rewrites stay reachable with a long text too.
+  const URL: &str = "/some/quite/long/canonical/path/for/this/page/index.html";
+  let long = "word ".repeat(600);
+  let cases: [(&str, String); 8] = [
+    // redundantLinks: text equal to the URL collapses to bare text.
+    ("redundant", format!("<p><a href=\"{URL}\">{URL}</a></p>")),
+    // GFM autolink: an absolute URI equal to its text collapses to <uri>.
+    (
+      "autolink",
+      "<p><a href=\"https://example.com/a/rather/long/path/to/somewhere\">\
+       https://example.com/a/rather/long/path/to/somewhere</a></p>"
+        .to_string(),
+    ),
+    // emptyLinkText: text that trims to nothing drops the whole link, however
+    // much whitespace it is.
+    (
+      "empty text",
+      format!("<p><a href=\"{URL}\">{}</a></p>", " ".repeat(4096)),
+    ),
+    // selfLinkHeadings: a fragment link in a heading loses its brackets.
+    (
+      "self link heading",
+      format!("<h2><a href=\"#slug\">{long}</a></h2>"),
+    ),
+    // emptyLinks: a meaningless href renders as plain text. Its exit returns
+    // before the bracket bookkeeping, so a previous link's release must not
+    // leak into it — hence the long link in front.
+    (
+      "skipped after released",
+      format!("<p><a href=\"{URL}\">{long}</a><a href=\"#\">{long}</a></p>"),
+    ),
+    // An inline marker closing empty truncates the buffer, shrinking the text.
+    (
+      "marker shrink",
+      format!("<p><a href=\"{URL}\">{URL}<em></em></a></p>"),
+    ),
+    // Trailing whitespace is trimmed at the block close, which shrinks a text
+    // that looked longer than the URL back to an equal one.
+    (
+      "trimmed back to equal",
+      format!("<p><a href=\"{URL}\">{URL}{}</a></p>", " ".repeat(2048)),
+    ),
+    // A title blocks the autolink shorthand and is itself compared against the
+    // link text, which the release moves out of the buffer.
+    (
+      "titled",
+      format!("<p><a href=\"{URL}\" title=\"{long}\">{long}</a></p>"),
+    ),
+  ];
+
+  for clean in [false, true] {
+    let opts = if clean {
+      HTMLToMarkdownOptions::default().with_clean(safe_clean())
+    } else {
+      HTMLToMarkdownOptions::default()
+    };
+    for (name, html) in &cases {
+      let expected = html_to_markdown(html, opts.clone());
+      for chunk in [8192, 997, 64] {
+        assert_eq!(
+          stream_chunks(html, chunk, opts.clone()),
+          expected,
+          "case={name} clean={clean} chunk={chunk}"
+        );
+      }
+    }
+  }
+}
