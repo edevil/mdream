@@ -1,0 +1,32 @@
+crates/core/tests/max_node_bytes.rs
+  s_1be176088e0292::t_d837d8f07a9b1d 282,286-289
+  s_1be176088e0292::t_023581e1398402 280-281,283-285,290-294,304-306
+  s_1be176088e0292::t_f62bc62e0a19f5 307-324,346-348
+  s_1be176088e0292::t_3e3536b80d728a 325-334,339-345
+  s_1be176088e0292::t_2d2e1da864f5c4 335-338
+  s_1be176088e0292::t_918959d1f7cc13 295-303
+crates/core/src/scan.rs
+  s_1be176088e0292::t_d837d8f07a9b1d 950-951
+  s_1be176088e0292::t_1925d31ab8aa79 127
+  s_1be176088e0292::t_918959d1f7cc13 126,128-142,145-149,151-180,933,946-949,952-953
+crates/core/src/convert/mod.rs
+  s_1be176088e0292::t_918959d1f7cc13 4-6,1302-1303,1491-1493,2022-2023
+  s_1be176088e0292::t_6a6a50281163a9 1462
+  s_1be176088e0292::t_1925d31ab8aa79 1301,1457-1461
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "130e0a2715366eeeeb78951c63a1de0af8cb5a91",
+  "prompts": {},
+  "sessions": {
+    "s_1be176088e0292": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_04d27be35ffeOnyzDaTNgXgkR2",
+        "model": "claude-opus-5"
+      },
+      "human_author": "André Cruz <acruz@cloudflare.com>"
+    }
+  }
+}
