@@ -1,0 +1,40 @@
+crates/node/Cargo.toml
+  s_ada83cc1c7c30b::t_c4e79dcfcddde4 12-13
+README.md
+  s_ada83cc1c7c30b::t_c4e79dcfcddde4 1-22
+crates/edge/Cargo.toml
+  s_ada83cc1c7c30b::t_c4e79dcfcddde4 12-13
+crates/Cargo.toml
+  s_ada83cc1c7c30b::t_c4e79dcfcddde4 11,15-16
+crates/core/Cargo.toml
+  s_ada83cc1c7c30b::t_c4e79dcfcddde4 16-17
+.gitlab-ci.yml
+  s_ada83cc1c7c30b::t_c4e79dcfcddde4 1-18,21-28
+  s_ada83cc1c7c30b::t_10def8fb2e5dc4 19-20
+crates/core/src/types.rs
+  s_ada83cc1c7c30b::t_3b0e8a6a6f05d7 36-37
+crates/core/src/scan.rs
+  s_ada83cc1c7c30b::t_5eb7d4a6eae1e8 563
+crates/core/src/convert/output.rs
+  s_ada83cc1c7c30b::t_5eb7d4a6eae1e8 3466
+crates/core/tests/streaming_drain.rs
+  s_ada83cc1c7c30b::t_f2478e2a7438af 588
+crates/Cargo.lock
+  s_ada83cc1c7c30b::t_660265124930b3 206,210,220
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "ba81236b6834e41e1f31bb58d6774b797951d8b1",
+  "prompts": {},
+  "sessions": {
+    "s_ada83cc1c7c30b": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_fa89c63fbffeB0gf5DExZfsLN1",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "André Cruz <acruz@cloudflare.com>"
+    }
+  }
+}
