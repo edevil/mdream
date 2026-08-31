@@ -1,0 +1,19 @@
+crates/core/README.md
+  s_ada83cc1c7c30b::t_348f52e680960e 17-22
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "9dcd0ccdd0064f691e5094c74a4b8d4243a88f3d",
+  "prompts": {},
+  "sessions": {
+    "s_ada83cc1c7c30b": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_fa89c63fbffeB0gf5DExZfsLN1",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "André Cruz <acruz@cloudflare.com>"
+    }
+  }
+}
