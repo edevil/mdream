@@ -1,0 +1,118 @@
+packages/js/src/utils.ts
+  s_a48234f9cb845a::t_c947f459eb9df9 110-114
+  s_a48234f9cb845a::t_ea3745fba3919b 109,115-116
+packages/js/src/tags.ts
+  s_a48234f9cb845a::t_ea3745fba3919b 1,127,255-257,259-266,779
+  s_a48234f9cb845a::t_64c9302a6d01d9 254,258,780,790-791
+packages/js/test/unit/clean-empty-links.test.ts
+  s_a48234f9cb845a::t_29ef308081a213 2,22-23,43-53
+  s_a48234f9cb845a::t_a06ef74477a411 24-30,33-36,41-42
+  s_a48234f9cb845a::t_be6540de0d6d60 31-32
+  s_a48234f9cb845a::t_c947f459eb9df9 37-40
+  s_e7fb0fc2160680::t_96c09e3a786f03 54
+crates/core/tests/conversion.rs
+  s_a48234f9cb845a::t_21720bbf071834 527
+  s_a48234f9cb845a::t_40973fcee06c43 363-364,368-369,393-401,403-429,431-439,441-449,451-459,461-469,471-476,478-479,481-489,526
+  s_a48234f9cb845a::t_64c9302a6d01d9 490-525
+  s_a48234f9cb845a::t_ad615e3fb9262c 402,477
+  s_a48234f9cb845a::t_a643243301624a 430,440,450,460,470,480
+packages/js/src/clean.ts
+  s_a48234f9cb845a::t_f0a1713c15ed28 232-235
+  s_a48234f9cb845a::t_2cd74cd63d95f3 86-94,122-124,169,202,206-209,216,218-223,231,287,292,319,324,385,390,463,467,510,514
+  s_a48234f9cb845a::t_be9af9fe32385e 95-121,125-129,293-297,325-329,391-395,468-472,515-519
+  s_a48234f9cb845a::t_29ef308081a213 404
+  s_a48234f9cb845a::t_88c9eae2531988 170-172,174-176,178-200,210-215,217
+  s_a48234f9cb845a::t_73dd98022dd508 173
+  s_a48234f9cb845a::t_f02fdfb0cf5bfb 205,229-230,245
+  s_a48234f9cb845a::t_c947f459eb9df9 177,224-228
+packages/mdream/test/unit/nodes/definition-lists.test.ts
+  s_a48234f9cb845a::t_7a6ea2a6b3c069 65
+packages/mdream/test/unit/nodes/links.test.ts
+  s_a48234f9cb845a::t_f02fdfb0cf5bfb 130-136
+  s_a48234f9cb845a::t_f0a1713c15ed28 117-124,150-151
+  s_a48234f9cb845a::t_29ef308081a213 137,144-149
+  s_a48234f9cb845a::t_64c9302a6d01d9 93-97,103,106
+  s_a48234f9cb845a::t_40973fcee06c43 29-35,37-79,81-92,98-102,104-105,107-108
+  s_a48234f9cb845a::t_ad615e3fb9262c 36,80
+  s_a48234f9cb845a::t_be9af9fe32385e 109-116
+  s_a48234f9cb845a::t_73dd98022dd508 138-143
+  s_a48234f9cb845a::t_3ef147413a2ff0 125-129
+packages/js/src/html-output.ts
+  s_4ce215e4afa29c::t_7adc9fc8ad0cf0 242-243
+  s_a48234f9cb845a::t_5ca0c1d7d8dffd 44-45,238-241
+  s_a48234f9cb845a::t_5bb8bec22fb4b3 118,250
+packages/js/test/unit/gfm-text-escaping.test.ts
+  s_a48234f9cb845a::t_7a6ea2a6b3c069 141,143
+packages/mdream/test/unit/html-output.test.ts
+  s_a48234f9cb845a::t_a06ef74477a411 35-40
+crates/core/src/convert/output.rs
+  s_a48234f9cb845a::t_ad615e3fb9262c 1000-1001,1068,1130,1250,1435,2814-2816,2979
+  s_a48234f9cb845a::t_059072edfd5385 1002
+crates/core/tests/streaming_drain.rs
+  s_20857daa8e2ab2::t_2d6594a9a47d02 375
+  s_a48234f9cb845a::t_f21fcab43ec0e1 391
+  s_a48234f9cb845a::t_b12a0e75867411 392-393
+  s_a48234f9cb845a::t_40973fcee06c43 376-390
+crates/core/src/convert/html_output.rs
+  s_a48234f9cb845a::t_ad615e3fb9262c 95
+packages/js/test/unit/streaming-parity.test.ts
+  s_20857daa8e2ab2::t_8fa5c9789b14c9 128
+  s_a48234f9cb845a::t_40973fcee06c43 129-132,134-135
+  s_a48234f9cb845a::t_be9af9fe32385e 133
+  s_a48234f9cb845a::t_508989ddd59ec0 137
+  s_a48234f9cb845a::t_797958976af687 136
+crates/core/tests/max_node_bytes.rs
+  s_a48234f9cb845a::t_5b5b0880c41cee 225-253
+crates/core/src/url.rs
+  s_a48234f9cb845a::t_c947f459eb9df9 218,244,274-276,869-870
+  s_a48234f9cb845a::t_d75f88d1dd6ee6 284-287
+  s_a48234f9cb845a::t_77247ea2e1d81c 283,288-296,860
+  s_a48234f9cb845a::t_1d017929dfc5dc 856-859
+  s_a48234f9cb845a::t_bce073f1166f72 298,309,316
+  s_a48234f9cb845a::t_6d00121eee9729 215,231-235,256-261
+  s_a48234f9cb845a::t_be6540de0d6d60 866
+  s_a48234f9cb845a::t_f02fdfb0cf5bfb 248,269,861-862
+  s_a48234f9cb845a::t_2cd74cd63d95f3 212,242,245-247,249-250,267-268,270-273,277,310-311
+  s_a48234f9cb845a::t_f0a1713c15ed28 278-282,297,299-308,312-315,317-321
+  s_a48234f9cb845a::t_88c9eae2531988 213-214,216-217,219-230,236-240,251-255,262-266,863-865,867-868
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "ffe236cf26c38c7bd5d9e5699819885462f0f1f0",
+  "prompts": {},
+  "sessions": {
+    "s_20857daa8e2ab2": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_f989a799effeU4CX448ayMlMpS",
+        "model": "claude-opus-4-7"
+      },
+      "human_author": "André Cruz <acruz@cloudflare.com>"
+    },
+    "s_4ce215e4afa29c": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_0091b7bbaffeQYtkEMH3ArxVc2",
+        "model": "claude-opus-5"
+      },
+      "human_author": "André Cruz <acruz@cloudflare.com>"
+    },
+    "s_a48234f9cb845a": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_f978991f0ffeTfVaxUB6o0jlV4",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": null
+    },
+    "s_e7fb0fc2160680": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_f9788bb47ffeonCC689Xl9SMXy",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "André Cruz <acruz@cloudflare.com>"
+    }
+  }
+}
