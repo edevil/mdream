@@ -1,0 +1,27 @@
+packages/js/src/utils.ts
+  s_a48234f9cb845a::t_0250841ef95d59 110-112,133
+  s_a48234f9cb845a::t_7378bb5c41de9e 113-122,127-132
+  s_a48234f9cb845a::t_915d7da54872a3 109,123-126
+packages/js/src/tags.ts
+  s_a48234f9cb845a::t_915d7da54872a3 263,266
+packages/mdream/test/unit/nodes/links.test.ts
+  s_a48234f9cb845a::t_0e87fa256e3cdc 43-44
+packages/mdream/test/unit/html-output.test.ts
+  s_a48234f9cb845a::t_0e87fa256e3cdc 45,58,63,66
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "91fa71c46094572f206f3b8a51da11f7171f3368",
+  "prompts": {},
+  "sessions": {
+    "s_a48234f9cb845a": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_f978991f0ffeTfVaxUB6o0jlV4",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "André Cruz <acruz@cloudflare.com>"
+    }
+  }
+}
