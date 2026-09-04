@@ -1,0 +1,90 @@
+packages/js/src/types.ts
+  s_4d454a7aa8e581::t_55741167756800 211
+packages/js/src/markdown-processor.ts
+  s_4d454a7aa8e581::t_55741167756800 55,1084,1086,1088-1089
+  s_4d454a7aa8e581::t_097fa40beffaea 776,782
+  s_4d454a7aa8e581::t_011ae129681dce 1085,1087
+crates/core/src/convert/parse.rs
+  s_4d454a7aa8e581::t_8c65a3c61d0c72 980-999
+  s_4d454a7aa8e581::t_7bc3e7701e5ba9 1000-1005,1012,1014-1015
+  s_4d454a7aa8e581::t_0c8dc99a84a199 1006-1011
+packages/js/test/unit/streaming-parity.test.ts
+  s_4d454a7aa8e581::t_2297d3f7a39ac9 128-131,139
+  s_4d454a7aa8e581::t_0c8dc99a84a199 123,126-127
+  s_4d454a7aa8e581::t_6eddb7a0d806df 132-138
+  s_4d454a7aa8e581::t_8eee3ec55707de 140-141
+  s_4d454a7aa8e581::t_aa7268bafefedb 119-122,124-125
+  s_4d454a7aa8e581::t_bc2607635bffeb 118
+packages/js/src/tags.ts
+  s_4d454a7aa8e581::t_48a0a0a7549bd3 817-819
+  s_4d454a7aa8e581::t_55741167756800 127,816,820
+crates/core/src/convert/html_output.rs
+  s_4d454a7aa8e581::t_55741167756800 241
+crates/core/src/convert/output.rs
+  s_4d454a7aa8e581::t_48a0a0a7549bd3 117,121,123-125
+  s_4d454a7aa8e581::t_2a40395b9d01eb 3588,3661-3663,3669-3673,3675-3682
+  s_4d454a7aa8e581::t_57c2af5a788bbd 829,833
+  s_4d454a7aa8e581::t_7bc3e7701e5ba9 115
+  s_4d454a7aa8e581::t_506cab0fec2fd7 113
+  s_4d454a7aa8e581::t_55741167756800 114,116,118-120,122,126-134,827-828,834-836,3683
+  s_4d454a7aa8e581::t_011ae129681dce 695,830-832,1028
+  s_4d454a7aa8e581::t_d183f6c6e1db66 3664-3668,3674
+  s_4d454a7aa8e581::t_a7f1605f2345b6 112
+  s_4d454a7aa8e581::t_a478bf84f16d1b 837
+packages/js/src/html-output.ts
+  s_4d454a7aa8e581::t_55741167756800 45,249
+crates/core/src/types.rs
+  s_4d454a7aa8e581::t_55741167756800 80
+crates/core/tests/streaming_drain.rs
+  s_4d454a7aa8e581::t_aa7268bafefedb 376,411-436,465-466
+  s_4d454a7aa8e581::t_56ca6426c348d6 384,387-400,402-409
+  s_4d454a7aa8e581::t_57c2af5a788bbd 452-453,455-456
+  s_4d454a7aa8e581::t_0c8dc99a84a199 382,385-386,401
+  s_4d454a7aa8e581::t_2297d3f7a39ac9 437,454,457-458,460-464
+  s_4d454a7aa8e581::t_7fc1d162c18290 459
+  s_4d454a7aa8e581::t_6eddb7a0d806df 377-381,383,410,438-451
+  s_4d454a7aa8e581::t_2f5308562d56b2 375
+packages/mdream/test/unit/nodes/links.test.ts
+  s_4d454a7aa8e581::t_097fa40beffaea 87-94,129-132
+  s_4d454a7aa8e581::t_7d716ad28d8009 133
+  s_4d454a7aa8e581::t_c609c43293f3ea 134
+  s_4d454a7aa8e581::t_c91cbbb51146d0 83-84
+  s_4d454a7aa8e581::t_aa7268bafefedb 43-59,68-82,95-128,137-146
+  s_4d454a7aa8e581::t_b2b3c111ef8d1d 135-136
+  s_4d454a7aa8e581::t_48a0a0a7549bd3 60-63
+  s_4d454a7aa8e581::t_2a40395b9d01eb 85-86
+  s_4d454a7aa8e581::t_0c8dc99a84a199 64-67
+packages/js/src/utils.ts
+  s_4d454a7aa8e581::t_55741167756800 2,515-517,519-521,524-526,529-536
+  s_4d454a7aa8e581::t_097fa40beffaea 498-499
+  s_4d454a7aa8e581::t_6ceedfed37a9a4 497,502
+  s_4d454a7aa8e581::t_48a0a0a7549bd3 518,522,527-528
+  s_4d454a7aa8e581::t_c9b8f3ce4a4ce1 500-501,506,523,537
+crates/core/tests/conversion.rs
+  s_4d454a7aa8e581::t_48a0a0a7549bd3 437-440
+  s_4d454a7aa8e581::t_aa7268bafefedb 418-436,445-452,454-457,460,489-506,508-555,563-590
+  s_4d454a7aa8e581::t_57c2af5a788bbd 453,507
+  s_4d454a7aa8e581::t_c91cbbb51146d0 458,461
+  s_4d454a7aa8e581::t_2a40395b9d01eb 462-464,466-467
+  s_4d454a7aa8e581::t_77b7dc52b8e610 15-33,459,465,486
+  s_4d454a7aa8e581::t_0c8dc99a84a199 441-444,468-485,487-488
+  s_4d454a7aa8e581::t_6eddb7a0d806df 556-562
+packages/mdream/test/unit/templates/__snapshots__/hacker-news.test.ts.snap
+  s_4d454a7aa8e581::t_c1b3b994b4d7c1 8,16
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "082bc4e2f9a9dfb193ddb77a3c4930cc45ca4d06",
+  "prompts": {},
+  "sessions": {
+    "s_4d454a7aa8e581": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_f9788e752ffe7iD5n5mdoTx0Jw",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "André Cruz <acruz@cloudflare.com>"
+    }
+  }
+}
