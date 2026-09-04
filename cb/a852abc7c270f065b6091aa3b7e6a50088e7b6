@@ -1,0 +1,40 @@
+packages/mdream/test/unit/nodes/figure.test.ts
+  s_e7fb0fc2160680::t_b71a9870628fa6 101-106
+packages/js/src/markdown-processor.ts
+  s_e7fb0fc2160680::t_b71a9870628fa6 175
+crates/core/tests/conversion.rs
+  s_e7fb0fc2160680::t_b71a9870628fa6 881-883
+  s_a48234f9cb845a::t_a2f3aadbf45b4b 880
+crates/core/tests/streaming_drain.rs
+  s_e7fb0fc2160680::t_b71a9870628fa6 227-229
+  s_a48234f9cb845a::t_c877cc59db6715 226
+crates/core/src/convert/mod.rs
+  s_e7fb0fc2160680::t_74a5de77eef133 154-157
+  s_e7fb0fc2160680::t_2a8d2a7bf3876b 151
+packages/js/test/unit/streaming-parity.test.ts
+  s_e7fb0fc2160680::t_b71a9870628fa6 137
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "cba852abc7c270f065b6091aa3b7e6a50088e7b6",
+  "prompts": {},
+  "sessions": {
+    "s_a48234f9cb845a": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_f978991f0ffeTfVaxUB6o0jlV4",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "André Cruz <acruz@cloudflare.com>"
+    },
+    "s_e7fb0fc2160680": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_f9788bb47ffeonCC689Xl9SMXy",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "André Cruz <acruz@cloudflare.com>"
+    }
+  }
+}
