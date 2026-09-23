@@ -52,7 +52,11 @@ fuzz_target!(|input: Input| {
       .use_origin
       .then(|| "https://example.com/base/".to_string()),
     clean_urls: input.clean_all,
-    clean: input.clean_all.then(CleanConfig::all),
+    // In Markdown, fragment cleanup buffers until finish; test incremental drains.
+    clean: input.clean_all.then(|| CleanConfig {
+      fragments: false,
+      ..CleanConfig::all()
+    }),
     plugins: Some(plugins),
     wrap_width: input.wrap_width as usize,
     max_node_bytes: 0,
@@ -64,11 +68,11 @@ fuzz_target!(|input: Input| {
     OutputFormat::Markdown
   };
 
-  // One-shot, same options.
-  let _ = html_to_format_result(&input.html, options.clone(), format);
+  let one_shot = html_to_format_result(&input.html, options.clone(), format).markdown;
 
   // Streamed at a fixed chunk width, rounded up to char boundaries.
   let width = (input.chunk_width as usize).max(1);
+  let mut streamed = String::new();
   let mut processor = MarkdownStreamProcessor::new_with_format(options, format);
   let mut start = 0;
   while start < input.html.len() {
@@ -76,8 +80,12 @@ fuzz_target!(|input: Input| {
     while end < input.html.len() && !input.html.is_char_boundary(end) {
       end += 1;
     }
-    let _ = processor.process_chunk(&input.html[start..end]);
+    streamed.push_str(&processor.process_chunk(&input.html[start..end]));
     start = end;
   }
-  let _ = processor.finish();
+  streamed.push_str(&processor.finish());
+  assert_eq!(
+    streamed, one_shot,
+    "streaming diverged from one-shot: input={input:?}"
+  );
 });
