@@ -1,0 +1,33 @@
+crates/core/fuzz/.gitignore
+  s_a753195a06ce65::t_02bc190aa7f943 6
+crates/core/fuzz/corpus/fuzz_streaming_chunks/quote-tail-glue
+  s_a753195a06ce65::t_67a74e84bbe126 1
+crates/core/fuzz/fuzz_targets/fuzz_capped_chunking.rs
+  s_a753195a06ce65::t_14acb09293a388 19-20,107-114,137-144,203-206,222,224-229,247-250,291-292,294-295,300-301,305-327
+crates/core/fuzz/fuzz_targets/fuzz_streaming_chunks.rs
+  s_a753195a06ce65::t_3e11ebdc050923 11-13,26-30,37-39,42-52
+crates/core/fuzz/html.dict
+  s_a753195a06ce65::t_7ce20ba3e6505a 50-56
+crates/core/src/convert/mod.rs
+  s_a753195a06ce65::t_79f1b6f29560bf 238-284,784-801,991-999,1056-1059,2281,2306-2307,2327-2328,2330,2346,2354,2680-2693
+crates/core/src/convert/output.rs
+  s_a753195a06ce65::t_9c191ea124767e 25-284,506-508,532-533,566-567,575-576,640-643,708,722-748,773-776,787,871,877-1421,1480,1483-1499,1524-1527,1533,1544-1562,1564-1611,1630-1636,1638-1639,1702,2306-2315,2416-2418,2469-2478,2487-2488,2541,2621-2632,2643-2651,2913,2951-2952,3433-3446,3479-3483,3550-3567,3788-3790,4382,5028-5032,5080-5085,5088,5098,5101-5103,5148-5152,5377,5380-5395
+crates/core/src/lib.rs
+  s_a753195a06ce65::t_b3a518d42debdb 169-171,181-209,481-1007
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "010af6c51d40c6201d03e7d90177228ad72b051a",
+  "prompts": {},
+  "sessions": {
+    "s_a753195a06ce65": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "c7782ee2-ad22-4656-93ca-453fea63362c",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "André Cruz <acruz@cloudflare.com>"
+    }
+  }
+}
