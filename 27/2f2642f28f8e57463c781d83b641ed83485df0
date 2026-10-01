@@ -1,0 +1,30 @@
+crates/core/src/convert/output.rs
+  s_a753195a06ce65::t_64fbd8eb1a0f67 2468-2472
+  s_a753195a06ce65::t_6790f813fd2dbc 2473,2475-2480,2482-2483,2487-2491
+  s_a753195a06ce65::t_ef4b14dfe85768 2467
+  s_a753195a06ce65::t_ec88dc4ca5840e 2474
+  s_a753195a06ce65::t_84ac0cef0f63e0 2481
+  s_a753195a06ce65::t_dcc63e6249c674 2484-2486
+crates/core/tests/conversion.rs
+  s_a753195a06ce65::t_51221d9308eef9 2394-2399
+crates/core/src/convert/mod.rs
+  s_a753195a06ce65::t_a9a4c2d18ca959 1079-1081
+crates/core/tests/max_node_bytes.rs
+  s_a753195a06ce65::t_44e5cea67aea14 1827-1871
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "272f2642f28f8e57463c781d83b641ed83485df0",
+  "prompts": {},
+  "sessions": {
+    "s_a753195a06ce65": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "c7782ee2-ad22-4656-93ca-453fea63362c",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "André Cruz <acruz@cloudflare.com>"
+    }
+  }
+}
