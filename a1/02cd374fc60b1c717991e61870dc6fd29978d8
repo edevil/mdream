@@ -1,0 +1,27 @@
+crates/core/src/convert/parse.rs
+  s_a753195a06ce65::t_36457661398934 1535-1537,1546-1548
+  s_a753195a06ce65::t_961efe20b2e3ad 1538-1545
+crates/core/src/convert/output.rs
+  s_a753195a06ce65::t_85b08af28dbb3e 565-568,684-687,728-731,4509-4515,4518-4530
+  s_a753195a06ce65::t_679d4c5dab0997 4516-4517
+  s_a753195a06ce65::t_f2c0732cb93ff0 4531-4532
+crates/core/src/convert/mod.rs
+  s_a753195a06ce65::t_85b08af28dbb3e 786-789,949-950
+  s_a753195a06ce65::t_36457661398934 2281-2285,2296-2308
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "a102cd374fc60b1c717991e61870dc6fd29978d8",
+  "prompts": {},
+  "sessions": {
+    "s_a753195a06ce65": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "c7782ee2-ad22-4656-93ca-453fea63362c",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "André Cruz <acruz@cloudflare.com>"
+    }
+  }
+}
