@@ -1,7 +1,23 @@
+crates/core/src/convert/mod.rs
+  s_a753195a06ce65::t_7d19c4b5c7ab45 1157-1165
+crates/core/tests/max_node_bytes.rs
+  s_a753195a06ce65::t_fb646d6b4d57cd 1908-1909,1911-1913
+  s_a753195a06ce65::t_40e1985ef52f36 1861-1907,1910,1916
+  s_a753195a06ce65::t_50fd842c013d25 1914-1915,1917-1919
 ---
 {
   "schema_version": "authorship/3.0.0",
   "git_ai_version": "1.6.10",
   "base_commit_sha": "582a1ff330b665e02bb4ad094a8c13db06411435",
-  "prompts": {}
+  "prompts": {},
+  "sessions": {
+    "s_a753195a06ce65": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "c7782ee2-ad22-4656-93ca-453fea63362c",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "André Cruz <acruz@cloudflare.com>"
+    }
+  }
 }
