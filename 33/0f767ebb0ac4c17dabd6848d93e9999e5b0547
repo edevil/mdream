@@ -1,0 +1,26 @@
+crates/core/src/convert/mod.rs
+  s_a753195a06ce65::t_585970ef63d5c9 801,971
+  s_a753195a06ce65::t_2dd88156ec0f89 802-804,972
+crates/core/src/convert/output.rs
+  s_a753195a06ce65::t_7364d5366b998a 3733
+  s_a753195a06ce65::t_2010c77b9c9cce 238-246,3729-3732
+  s_a753195a06ce65::t_2dd88156ec0f89 4370,4625-4641,4643
+  s_a753195a06ce65::t_3f89d590fa5d36 4371-4373
+  s_a753195a06ce65::t_7adff89aecdf1a 4642,4644
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "330f767ebb0ac4c17dabd6848d93e9999e5b0547",
+  "prompts": {},
+  "sessions": {
+    "s_a753195a06ce65": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "c7782ee2-ad22-4656-93ca-453fea63362c",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": null
+    }
+  }
+}
