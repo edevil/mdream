@@ -1,10 +1,12 @@
 crates/core/src/convert/mod.rs
   s_a753195a06ce65::t_2dd88156ec0f89 802-804,967,972
+  s_a753195a06ce65::t_db06c7ce8b0d07 801,971
 crates/core/src/convert/output.rs
   s_a753195a06ce65::t_3f89d590fa5d36 4371-4373
   s_a753195a06ce65::t_2dd88156ec0f89 4370,4623-4640
   s_a753195a06ce65::t_2010c77b9c9cce 238-246,3729-3732,4641
   s_a753195a06ce65::t_7364d5366b998a 3733,4642
+  s_a753195a06ce65::t_db06c7ce8b0d07 4622
 ---
 {
   "schema_version": "authorship/3.0.0",
