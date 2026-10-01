@@ -1,0 +1,23 @@
+crates/core/src/convert/mod.rs
+  s_a753195a06ce65::t_7d19c4b5c7ab45 1157-1165
+crates/core/tests/max_node_bytes.rs
+  s_a753195a06ce65::t_fb646d6b4d57cd 1989-1990,1992-1994
+  s_a753195a06ce65::t_40e1985ef52f36 1942-1988,1991,1997
+  s_a753195a06ce65::t_50fd842c013d25 1995-1996,1998-2000
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "cca557816f048f756c648289d270489f3f2acd05",
+  "prompts": {},
+  "sessions": {
+    "s_a753195a06ce65": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "c7782ee2-ad22-4656-93ca-453fea63362c",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "André Cruz <acruz@cloudflare.com>"
+    }
+  }
+}
