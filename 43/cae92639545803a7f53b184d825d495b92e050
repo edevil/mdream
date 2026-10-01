@@ -1,0 +1,47 @@
+crates/core/src/types.rs
+  s_a753195a06ce65::t_198f90ebd2a714 652-654
+crates/core/src/convert/parse.rs
+  s_a753195a06ce65::t_0aa35239a8ba80 1543-1553,1560-1562,1566,1568-1577,1730
+  s_a753195a06ce65::t_407565c5a6583b 1554-1557,1559,1567
+  s_a753195a06ce65::t_74cd986467edb3 845-850,1724-1729,1731-1737
+crates/core/fuzz/corpus/fuzz_streaming_chunks/end-tag-junk
+  s_a753195a06ce65::t_f752b8cd4091d2 1
+crates/core/tests/max_node_bytes.rs
+  s_a753195a06ce65::t_e4551a564ca4f6 613,643,1807-1809,1812
+  s_a753195a06ce65::t_5138fad980bbdd 563-565,572-573,580-612,614-642,644,1463
+crates/core/src/convert/mod.rs
+  s_a753195a06ce65::t_00dfc06b326d86 599-605,792-795,848-849,956-957,995,1246-1247,1251-1258,1489-1490,1492-1493,1545-1546,1548-1549,1643-1644,1646-1647,1824,1834-1837,1855-1869,1873-1875,1877-1880,1887-1899,1901-1906,1910,1913-1921,1923-1925,2155-2159,2162-2163,2172-2173,2178-2180,2184,2780-2791,2897-2967
+  s_a753195a06ce65::t_62350b2abfdabf 4,1870
+  s_a753195a06ce65::t_a00300bb05dc8e 1907-1909,1911-1912,1922
+  s_a753195a06ce65::t_bea5d9f1bafdb7 1248-1250
+  s_a753195a06ce65::t_4285a7818074df 1881-1886
+  s_a753195a06ce65::t_d58c32c9d61a2d 1872,1876
+  s_a753195a06ce65::t_61961cdf376f3d 5
+crates/core/fuzz/fuzz_targets/fuzz_capped_chunking.rs
+  s_a753195a06ce65::t_7b737243700e37 18-20,106-108,125-127,139-140,147-150,154-173,195-228,230,232-239,251,257-258,287-291
+crates/core/tests/end_tag_recovery.rs
+  s_a753195a06ce65::t_aec41a73029639 2-3,63-263
+crates/core/fuzz/.gitignore
+  s_a753195a06ce65::t_b7f8a30a6dfece 5
+crates/core/src/scan.rs
+  s_a753195a06ce65::t_318744f57624fb 219
+  s_a753195a06ce65::t_fe26ffa89a078a 192-195,197-199,204-218
+crates/core/fuzz/html.dict
+  s_a753195a06ce65::t_11a1d67fd92343 122-129
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "43cae92639545803a7f53b184d825d495b92e050",
+  "prompts": {},
+  "sessions": {
+    "s_a753195a06ce65": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "c7782ee2-ad22-4656-93ca-453fea63362c",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": null
+    }
+  }
+}
