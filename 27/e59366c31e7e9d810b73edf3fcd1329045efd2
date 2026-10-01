@@ -1,0 +1,39 @@
+crates/core/src/convert/output.rs
+  s_a753195a06ce65::t_9c191ea124767e 25-282,505-507,531-532,565-566,574-575,639-642,707,721-747,772-775,782-785,789,873,879-1449,1453-1455,1458-1462,1514,1517-1534,1559-1562,1568,1579-1597,1599-1661,1680-1686,1688-1689,1752,2356-2365,2466-2468,2519-2528,2537-2538,2591,2671-2682,2693-2701,2963,3001-3002,3483-3496,3529-3533,3600-3617,3838-3840,4432,5078-5082,5130-5135,5138,5148,5151-5153,5198-5202,5427,5430-5445
+  s_a753195a06ce65::t_29430b19aff0df 23-24
+crates/core/fuzz/corpus/fuzz_streaming_chunks/quote-tail-glue
+  s_a753195a06ce65::t_67a74e84bbe126 1
+crates/core/src/lib.rs
+  s_a753195a06ce65::t_b3a518d42debdb 169-171,181-221,493-1201
+crates/core/fuzz/.gitignore
+  s_a753195a06ce65::t_145f2509b21073 7-8
+  s_a753195a06ce65::t_02bc190aa7f943 6
+crates/core/fuzz/fuzz_targets/fuzz_streaming_chunks.rs
+  s_a753195a06ce65::t_3e11ebdc050923 11-16,18,21-22,24,27-28,31-42,49-53,56-73
+crates/core/fuzz/corpus/fuzz_streaming_chunks/quote-flush-owed-blank-line
+  s_a753195a06ce65::t_9e5a6994bab0b4 1
+crates/core/fuzz/html.dict
+  s_a753195a06ce65::t_7ce20ba3e6505a 50-56
+crates/core/fuzz/fuzz_targets/fuzz_capped_chunking.rs
+  s_a753195a06ce65::t_14acb09293a388 19-23,110-117,140-147,206-209,221-223,228,230-235,253-256,297-304,306-309,314-317,321-353
+crates/core/src/convert/mod.rs
+  s_a753195a06ce65::t_79f1b6f29560bf 238-284,784-805,995-1005,1062-1065,2287,2312-2313,2333-2334,2336,2352,2360,2587-2590,2594-2595,2691-2704
+crates/core/fuzz/corpus/fuzz_streaming_chunks/quote-flush-owed-threshold
+  s_a753195a06ce65::t_162bc3bbc45408 1
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "27e59366c31e7e9d810b73edf3fcd1329045efd2",
+  "prompts": {},
+  "sessions": {
+    "s_a753195a06ce65": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "c7782ee2-ad22-4656-93ca-453fea63362c",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "André Cruz <acruz@cloudflare.com>"
+    }
+  }
+}
