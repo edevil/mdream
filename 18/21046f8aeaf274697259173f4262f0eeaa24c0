@@ -1,10 +1,13 @@
 crates/core/tests/max_node_bytes.rs
   s_a753195a06ce65::t_50fb505533002a 1731-1733
   s_a753195a06ce65::t_554513bb8687c0 1804-1817,1876-1907
+  s_a753195a06ce65::t_ec56d5f4aadb30 1731-1733,1804-1817,1876-1907
 crates/core/src/convert/output.rs
   s_a753195a06ce65::t_50fb505533002a 1274-1275
+  s_a753195a06ce65::t_0315b092c9be8c 1274-1275
 crates/core/src/convert/mod.rs
   s_a753195a06ce65::t_50fb505533002a 207,2333,2337
+  s_a753195a06ce65::t_00dae334005747 207,2333,2337
 ---
 {
   "schema_version": "authorship/3.0.0",
