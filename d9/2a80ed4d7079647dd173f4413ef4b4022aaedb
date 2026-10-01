@@ -2,6 +2,8 @@ crates/core/src/convert/output.rs
   s_a753195a06ce65::t_a4c89a6087ee1d 4645-4662
 crates/core/src/convert/mod.rs
   s_a753195a06ce65::t_f67b60a415a09c 806-808,971,978,2473-2480,2482-2488
+  s_a753195a06ce65::t_0a175522a9f479 805
+  s_a753195a06ce65::t_0be57e594e726b 977
 ---
 {
   "schema_version": "authorship/3.0.0",
