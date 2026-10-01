@@ -1,0 +1,24 @@
+crates/core/src/convert/mod.rs
+  s_a753195a06ce65::t_2dd88156ec0f89 786-788,948-949
+crates/core/src/convert/output.rs
+  s_a753195a06ce65::t_3f89d590fa5d36 4311-4313
+  s_a753195a06ce65::t_2dd88156ec0f89 4310,4515-4532
+  s_a753195a06ce65::t_2010c77b9c9cce 238-246,3669-3672,4533
+  s_a753195a06ce65::t_7364d5366b998a 3673,4534
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "f87222f80f553097db67cf614803432d59f3ef10",
+  "prompts": {},
+  "sessions": {
+    "s_a753195a06ce65": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "c7782ee2-ad22-4656-93ca-453fea63362c",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "André Cruz <acruz@cloudflare.com>"
+    }
+  }
+}
