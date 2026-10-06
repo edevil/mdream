@@ -1,0 +1,31 @@
+crates/Cargo.toml
+  s_8376e5e517826f::t_5f1be82c663559 11,15-16
+crates/core/README.md
+  s_8376e5e517826f::t_5f1be82c663559 8,14
+README.md
+  s_8376e5e517826f::t_5f1be82c663559 1-34
+.gitlab-ci.yml
+  s_8376e5e517826f::t_7caf9ede7d3123 1-32
+crates/core/Cargo.toml
+  s_8376e5e517826f::t_5f1be82c663559 16-17
+crates/Cargo.lock
+  s_8376e5e517826f::t_3a22c71f4d6a54 206,210,220
+crates/core/fuzz/Cargo.lock
+  s_8376e5e517826f::t_469834dc7899fa 88
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "d3c607f77149462a2d21e82bfe9255bfd1b26c74",
+  "prompts": {},
+  "sessions": {
+    "s_8376e5e517826f": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "44f0c331-636c-4788-814b-305a906e378f",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "André Cruz <acruz@cloudflare.com>"
+    }
+  }
+}
