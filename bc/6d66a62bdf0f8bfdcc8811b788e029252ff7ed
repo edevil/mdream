@@ -1,0 +1,26 @@
+crates/core/tests/whitespace_breaks.rs
+  s_8376e5e517826f::t_c300fed6b53b81 307-313,320,325
+  s_8376e5e517826f::t_56ec35c3c04fdc 314-317,321-324
+  s_8376e5e517826f::t_238de5868a321e 318-319,326-328
+crates/core/src/convert/output.rs
+  s_8376e5e517826f::t_20205110c233ca 1839-1840,1845-1846,1849-1851
+  s_8376e5e517826f::t_3f6f54d958de5f 1864
+  s_8376e5e517826f::t_1616d74eb06c56 1841-1844
+  s_8376e5e517826f::t_3f7b426f93cc59 1847-1848
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "bc6d66a62bdf0f8bfdcc8811b788e029252ff7ed",
+  "prompts": {},
+  "sessions": {
+    "s_8376e5e517826f": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "44f0c331-636c-4788-814b-305a906e378f",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "André Cruz <acruz@cloudflare.com>"
+    }
+  }
+}
